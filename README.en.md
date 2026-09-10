@@ -57,7 +57,11 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 
 ## 🆕 What's New
 
-**v1.5.0 (latest)**
+**v1.6.0 (latest)**
+- 🔎 **Metadata cross-check upgraded**: on exact DOI hit, besides the title, **year / volume / issue / pages** are now compared against the authoritative record — any mismatch flags ⚠️ (catches "real paper but wrong vol/issue/pages")
+- 🈴 **Chinese-literature coverage note**: OpenAlex covers Chinese titles sparsely; a real Chinese paper may be flagged ❌ — confirm it on CNKI/Wanfang manually; fixed the OpenAlex edition-year false positive (2017 paper matched a 2025 reprint)
+
+**v1.5.0**
 - 🔗 **Clickable DOIs**: DOIs in reference-list entries become hyperlinks straight to the paper page (External links, verified in Word, idempotent re-runs); GB format now renders DOIs as `https://doi.org/…`
 - 📑 **Author-year a/b suffixes**: same author & same year → auto `2023a`/`2023b` by title order, in both in-text labels and the list (per GB/T 7714)
 - 🔎 **note quality check**: `verify_refs.py` now flags a `note` shorter than 6 chars — spell out exactly which sentence/claim the paper backs
@@ -76,7 +80,7 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 - 🛡️ Fixed: body paragraphs after the reference heading are no longer deleted; clear hint when the document is open in Word; `.docx` only
 - 🧪 New `edge_test.py` boundary regression
 
-> Full version history (v1.0.0 → v1.5.0) in [CHANGELOG.md](CHANGELOG.md).
+> Full version history (v1.0.0 → v1.6.0) in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

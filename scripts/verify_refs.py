@@ -67,7 +67,8 @@ def http_json(url, timeout=20, retries=2):
 
 
 def check_crossref(doi):
-    """按 DOI 查 Crossref。返回 (found, title, year, container, error)。"""
+    """按 DOI 查 Crossref。
+    返回 (found, title, year, container, volume, issue, page, error)。"""
     try:
         data = http_json(
             "https://api.crossref.org/works/" + urllib.parse.quote(doi))
@@ -80,13 +81,16 @@ def check_crossref(doi):
                 year = str(dp[0][0])
                 break
         container = (msg.get("container-title") or [""])[0]
-        return True, title, year, container, None
+        volume = str(msg.get("volume") or "")
+        issue = str(msg.get("issue") or "")
+        page = str(msg.get("page") or "")
+        return True, title, year, container, volume, issue, page, None
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return False, "", "", "", None
-        return False, "", "", "", f"HTTP {e.code}"
+            return False, "", "", "", "", "", "", None
+        return False, "", "", "", "", "", "", f"HTTP {e.code}"
     except Exception as e:
-        return False, "", "", "", f"{type(e).__name__}: {e}"
+        return False, "", "", "", "", "", "", f"{type(e).__name__}: {e}"
 
 
 def search_openalex(title):
@@ -96,7 +100,7 @@ def search_openalex(title):
         time.sleep(0.3)  # 对 OpenAlex 保持礼貌间隔，降低 429 概率
         url = ("https://api.openalex.org/works?search="
                + urllib.parse.quote(title)
-               + "&per-page=1&select=title,publication_year")
+               + "&per-page=1&select=title,publication_year,biblio")
         data = http_json(url)
         res = data.get("results") or []
         if not res:
@@ -106,6 +110,11 @@ def search_openalex(title):
         return True, t, y, None
     except Exception as e:
         return False, "", "", f"{type(e).__name__}: {e}"
+
+
+def _norm_num(s):
+    """归一化卷/期/页数值：去空白、en-dash 统一为连字符、去尾部句点。"""
+    return (s or "").strip().replace("–", "-").replace(" ", "").rstrip(".,;：:。，；")
 
 
 def verify(ref, offline):
@@ -129,16 +138,27 @@ def verify(ref, offline):
 
     doi = (ref.get("doi") or "").strip()
     if doi:
-        found, c_title, c_year, c_src, err = check_crossref(doi)
+        found, c_title, c_year, c_src, c_vol, c_iss, c_page, err = \
+            check_crossref(doi)
         if err:
             return "🔶 无法联网", f"Crossref: {err}", issues
         if found:
-            if ratio(c_title, title) >= 0.65:
-                return "✅ 已核实", \
-                    f"Crossref DOI 命中：{c_title[:45]}（{c_year}）", issues
-            return "⚠️ 信息有出入", \
-                f"DOI 命中但题名不符：库里「{c_title[:45]}」 vs 录入「{title[:30]}」", issues
-        # DOI 404 → OpenAlex 按题名兜底
+            mism = []
+            if ratio(c_title, title) < 0.65:
+                mism.append(f"题名不符（库「{c_title[:45]}」vs 录入「{title[:30]}」）")
+            for fld, cv in (("year", c_year), ("volume", c_vol),
+                            ("issue", c_iss), ("pages", c_page)):
+                v = _norm_num(ref.get(fld))
+                c = _norm_num(cv)
+                if v and c and c != v:
+                    mism.append(f"{fld}不符（库 {c} vs 录入 {v}）")
+            if mism:
+                return "⚠️ 信息有出入", "；".join(mism), issues
+            return "✅ 已核实", \
+                f"Crossref DOI 命中：{c_title[:45]}（{c_year}）", issues
+        # DOI 404 → OpenAlex 按题名兜底（只核对题名：OpenAlex 搜索结果可能
+        # 匹配到不同版本/预印本，年份核对会误报，如 Attention Is All You Need
+        # 命中 2025 重印版；年份核对仅在 Crossref DOI 精确命中时进行）
         f2, o_title, o_year, err2 = search_openalex(title)
         if err2:
             return "🔶 无法联网", f"DOI 404 且 OpenAlex: {err2}", issues
@@ -147,7 +167,7 @@ def verify(ref, offline):
                 f"DOI 404（非 Crossref 收录），OpenAlex 题名命中：{o_title[:45]}（{o_year}）", issues
         return "❌ 未找到", \
             f"DOI 查不到且题名也搜不到（{title[:35]}）——可能是编造或信息有误", issues
-    # 无 DOI → OpenAlex 题名搜索
+    # 无 DOI → OpenAlex 题名搜索（同上：只核对题名，不核对年份）
     f, o_title, o_year, err = search_openalex(title)
     if err:
         return "🔶 无法联网", f"OpenAlex: {err}", issues

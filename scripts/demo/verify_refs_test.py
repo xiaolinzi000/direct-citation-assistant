@@ -86,6 +86,14 @@ def test_norm_ratio():
     check("无关标题 ratio<0.5", vr.ratio("abc def", "xyz qwe") < 0.5)
 
 
+def test_norm_num():
+    print("2.5) 卷/期/页归一化")
+    check("en-dash 统一", vr._norm_num("1–10") == "1-10")
+    check("去空格", vr._norm_num("30 ") == "30")
+    check("去尾部句点", vr._norm_num("30.") == "30")
+    check("空值", vr._norm_num("") == "")
+
+
 def test_offline_mode():
     print("3) --offline 模式不联网")
     tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -111,5 +119,6 @@ def test_offline_mode():
 if __name__ == "__main__":
     test_field_checks()
     test_norm_ratio()
+    test_norm_num()
     test_offline_mode()
     print(f"\n🎉 verify_refs 离线回归全部通过（{PASS} 项断言）")
