@@ -220,14 +220,14 @@ def gbt7714(r):
             base += f". {src}"
         base += "."
         if doi:
-            base += f" {doi}."
+            base += f" https://doi.org/{doi}."
         return base
     if ttype in ("M", "D", "C"):
         # 专著/学位论文/会议录：出版地: 出版者, 年（city 缺省则省略出版地）
         place = f"{city}: " if city else ""
         base += f". {place}{src_it}, {year}."
         if doi:
-            base += f" {doi}."
+            base += f" https://doi.org/{doi}."
         return base
     # 期刊等：期刊名, 年, 卷(期): 页码
     vp = ""
@@ -239,7 +239,7 @@ def gbt7714(r):
             vp += f": {pages}"
     base += f". {src_it}, {year}{vp}."
     if doi:
-        base += f" {doi}."
+        base += f" https://doi.org/{doi}."
     return base
 
 

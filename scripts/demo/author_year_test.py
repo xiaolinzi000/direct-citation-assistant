@@ -42,6 +42,8 @@ def summary():
     body = root.find(w("body"))
     hyps = []
     for h in body.iter(w("hyperlink")):
+        if not (h.get(w("anchor")) or ""):
+            continue  # 跳过文末条目的 DOI 外部超链接
         txt = para_text(h).strip()
         if txt:
             hyps.append((h.get(w("anchor")) or "", txt))

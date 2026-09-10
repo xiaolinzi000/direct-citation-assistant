@@ -118,8 +118,11 @@ def verify(ref, offline):
         issues.append("缺作者")
     if not (ref.get("year") or "").strip():
         issues.append("缺年份")
-    if not (ref.get("note") or "").strip():
+    note = (ref.get("note") or "").strip()
+    if not note:
         issues.append("note 未填（建议记录本条目支撑的句子，便于核对是否对得上）")
+    elif len(note) < 6:
+        issues.append("note 过短（<6字），请写明该文献支撑的具体句子/观点（如“支持句3的结论”）")
 
     if offline:
         return "⬜ 字段检查", "（--offline 未联网）", issues

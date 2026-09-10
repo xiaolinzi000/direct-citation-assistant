@@ -49,7 +49,7 @@ def build_refs(tmp_path, rows):
 def test_field_checks():
     print("1) 字段完整性检查")
     good = {"key": "a", "type": "journal", "title": "Some paper",
-            "authors": "Smith, J.", "year": "2020", "note": "支撑句"}
+            "authors": "Smith, J.", "year": "2020", "note": "支撑第3段核心结论"}
     status, detail, issues = vr.verify(good, offline=True)
     check("完整条目无字段问题", status == "⬜ 字段检查" and not issues,
           f"issues={issues}")
@@ -65,6 +65,12 @@ def test_field_checks():
                "year": "2021", "note": ""}
     status, detail, issues = vr.verify(no_note, offline=True)
     check("note 缺失单独提示", any("note" in i for i in issues), f"{issues}")
+
+    short_note = {"key": "d", "type": "journal", "title": "X", "authors": "Y",
+                  "year": "2021", "note": "支撑"}
+    status, detail, issues = vr.verify(short_note, offline=True)
+    check("note 过短单独提示", any("note 过短" in i for i in issues),
+          f"{issues}")
 
 
 def test_norm_ratio():

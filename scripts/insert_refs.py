@@ -68,6 +68,10 @@ ANY_RE = re.compile(r"\[\?\]")
 OLD_REF_RE = re.compile(r"^\[\d+\]$|^\(\d+\)$|^\([^()]*\d{4}[^()]*\)$")
 ENTRY_START_RE = re.compile(r"^\[(\d+)\]\s")
 
+# DOI 识别：URL 形式（https://doi.org/…）或原始形式（10.xxxx/…）
+DOI_URL_RE = re.compile(r"https?://doi\.org/\S+", re.IGNORECASE)
+DOI_RAW_RE = re.compile(r"10\.\d{4,9}/[^\s，。；;]+")
+
 TARGET_HEADINGS = ("references", "reference", "bibliography", "参考文献",
                    "参考文献(references)", "references(参考文献)", "文献目录")
 
@@ -322,15 +326,44 @@ def build_hyperlink(anchor, text, superscript, hyperlink_style_id,
     return h
 
 
-def make_label(pt, bracket, citation_mode, refs_by_key):
+def compute_year_suffixes(used_keys, refs_by_key):
+    """author-year 制：同一（首作者, 年份）的多篇文献按题名字母序加 a/b/c 后缀
+    （GB/T 7714 著者-出版年制规范，如 (Zhang, 2023a)/(Zhang, 2023b)）。
+    返回 {key: suffix}；无同年同作者时返回空 dict。"""
+    try:
+        from format_refs import _split_authors
+    except Exception:
+        _split_authors = lambda s: []
+    groups = {}
+    for key in used_keys:
+        ref = refs_by_key.get(key, {})
+        lst = _split_authors(ref.get("authors", ""))
+        first = (lst[0] if lst else "").lower()
+        g = (first, ref.get("year", ""))
+        groups.setdefault(g, []).append(key)
+    suffix = {}
+    for g, keys in groups.items():
+        if len(keys) <= 1:
+            continue
+        ordered = sorted(
+            keys,
+            key=lambda k: ((refs_by_key.get(k, {}) or {}).get("title", "").lower()))
+        for i, k in enumerate(ordered, 1):
+            suffix[k] = chr(ord("a") + i - 1)
+    return suffix
+
+
+def make_label(pt, bracket, citation_mode, refs_by_key, year_suffix=None):
     """生成正文引用显示文本：
        numbered  ->  [n] 或 (n)（括号由 --bracket 定）
        author-year -> (Author, Year)；多作者英文 (Smith et al., 2023)、中文 (张三等, 2023)
     """
     key = pt["key"]
+    year_suffix = year_suffix or {}
     if citation_mode == "author-year":
         ref = refs_by_key.get(key, {})
         year = ref.get("year", "").strip()
+        sfx = year_suffix.get(key, "")
         try:
             from format_refs import _is_cjk, _split_authors
         except Exception:
@@ -349,19 +382,19 @@ def make_label(pt, bracket, citation_mode, refs_by_key):
             else:
                 suffix = ""
             name = f"{surname}{suffix}"
-            return f"({name}, {year})" if year else f"({name})"
-        return f"({year})" if year else "(?)"
+            return f"({name}, {year}{sfx})" if year else f"({name})"
+        return f"({year}{sfx})" if year else "(?)"
     return f"{bracket[0]}{pt['num']}{bracket[1]}"
 
 
 def insert_hyperlinks(points, bracket, superscript, hyperlink_style_id,
                       citation_mode="numbered", refs_by_key=None,
-                      font_en="", font_cn=""):
+                      font_en="", font_cn="", year_suffix=None):
     """为占位符类引用点把锚点 run 替换为超链接；更新旧超链接文本。返回替换数量。"""
     refs_by_key = refs_by_key or {}
     new_count = 0
     for pt in points:
-        label = make_label(pt, bracket, citation_mode, refs_by_key)
+        label = make_label(pt, bracket, citation_mode, refs_by_key, year_suffix)
         anchor = f"ref_{pt['key']}"
         if pt["kind"] == "old":
             # 更新已有超链接内 run 文本
@@ -433,7 +466,8 @@ def sort_key_ref(ref):
 def build_entry_paragraph(num, key, ref, style, entry_num_style, bookmark_id,
                           citation_mode="numbered", font_en="", font_cn="",
                           indent=True, align="both", bold_num=False,
-                          hanging_pt=21.0, italic_source=True):
+                          hanging_pt=21.0, italic_source=True,
+                          doi_links=None, hyperlink_style_id=None):
     p = etree.Element(w("p"))
     # 段落格式：通行惯例「悬挂缩进 2 字符」（国标未强制版式，可 --no-indent 关闭）。
     # 必须用 twips 单位 w:left/w:hanging（=2字符×字号），leftChars/hangingChars 在
@@ -465,10 +499,62 @@ def build_entry_paragraph(num, key, ref, style, entry_num_style, bookmark_id,
         rtab = etree.SubElement(p, w("r"))
         tab = etree.SubElement(rtab, w("tab"))  # 制表符：内容推进到悬挂缩进位置
     # 条目文本分段渲染：中英文混排（中文宋体、英文/数字 Times New Roman），
-    # 西文期刊名/书名等规范斜体部分拆为独立 run（加 <w:i/>）
+    # 西文期刊名/书名等规范斜体部分拆为独立 run（加 <w:i/>）；
+    # DOI 片段（https://doi.org/… 或 10.xxxx/…）做成可点击超链接指向论文页面。
     for text, italic in format_ref_segments(ref, style):
         if italic and not italic_source:
             italic = False
+        m = None
+        if doi_links:
+            m = DOI_URL_RE.search(text)
+            if m is None:
+                m = DOI_RAW_RE.search(text)
+        if m:
+            raw = m.group(0)
+            url = raw.rstrip(".,;：:。，；")
+            drop = raw[len(url):]  # 被剥掉的尾部标点（句子句点等）保留在超链接外
+            target = url if url.lower().startswith("https://doi.org/") \
+                else "https://doi.org/" + url
+            rid = doi_links.get(target)
+            head = text[:m.start()]
+            tail = drop + text[m.end():]
+            if head:
+                r0 = etree.SubElement(p, w("r"))
+                r0pr = etree.SubElement(r0, w("rPr"))
+                set_run_fonts(r0pr, font_en, font_cn)
+                if italic:
+                    etree.SubElement(r0pr, w("i"))
+                t0 = etree.SubElement(r0, w("t"))
+                t0.text = head
+            if rid:
+                h = etree.SubElement(p, w("hyperlink"))
+                h.set(f"{{{R_NS}}}id", rid)
+                h.set(w("tooltip"), "打开论文页面")
+                r1 = etree.SubElement(h, w("r"))
+                r1pr = etree.SubElement(r1, w("rPr"))
+                set_run_fonts(r1pr, font_en, font_cn)
+                if italic:
+                    etree.SubElement(r1pr, w("i"))
+                if hyperlink_style_id:
+                    st = etree.SubElement(r1pr, w("rStyle"))
+                    st.set(w("val"), hyperlink_style_id)
+                else:
+                    # 无 Hyperlink 样式时 fallback：蓝色 + 下划线，保证可点击外观
+                    color = etree.SubElement(r1pr, w("color"))
+                    color.set(w("val"), "0563C1")
+                    u = etree.SubElement(r1pr, w("u"))
+                    u.set(w("val"), "single")
+                t1 = etree.SubElement(r1, w("t"))
+                t1.text = url
+            if tail:
+                r2 = etree.SubElement(p, w("r"))
+                r2pr = etree.SubElement(r2, w("rPr"))
+                set_run_fonts(r2pr, font_en, font_cn)
+                if italic:
+                    etree.SubElement(r2pr, w("i"))
+                t2 = etree.SubElement(r2, w("t"))
+                t2.text = tail
+            continue
         r2 = etree.SubElement(p, w("r"))
         r2pr = etree.SubElement(r2, w("rPr"))
         set_run_fonts(r2pr, font_en, font_cn)
@@ -482,14 +568,71 @@ def build_entry_paragraph(num, key, ref, style, entry_num_style, bookmark_id,
     return p
 
 
+def doi_links_for_entries(items, refs, used_keys):
+    """为文末条目中的 DOI 建立可点击超链接：
+    document.xml.rels 增加 External 关系（Target=https://doi.org/xxx）。
+    已有同 Target 的 hyperlink 关系复用（重跑幂等，不新增）。
+    返回 {doi_url: rId} 映射；无 DOI 时返回 None。"""
+    urls = []
+    key_to_ref = {r["key"]: r for r in refs}
+    for key in used_keys:
+        ref = key_to_ref.get(key) or {}
+        doi = (ref.get("doi") or "").strip()
+        if doi:
+            urls.append("https://doi.org/" + doi.lstrip("https://doi.org/").lstrip("/"))
+    if not urls:
+        return None
+    rels_name = "word/_rels/document.xml.rels"
+    rels_root = None
+    if rels_name in items:
+        try:
+            rels_root = etree.fromstring(items[rels_name])
+        except Exception:
+            rels_root = None
+    if rels_root is None:
+        rels_root = etree.Element(f"{{{P_REL}}}Relationships")
+    max_id = 0
+    existing = {}
+    for rel in rels_root:
+        m = re.match(r"rId(\d+)", rel.get("Id") or "")
+        if m:
+            max_id = max(max_id, int(m.group(1)))
+        if rel.get("TargetMode") == "External" and \
+                (rel.get("Type") or "").endswith("/hyperlink"):
+            t = rel.get("Target") or ""
+            if t.startswith("https://doi.org/"):
+                existing[t] = rel.get("Id")
+    mapping = {}
+    for url in urls:
+        if url in existing:
+            mapping[url] = existing[url]
+            continue
+        max_id += 1
+        rid = f"rId{max_id}"
+        rel = etree.SubElement(rels_root, f"{{{P_REL}}}Relationship")
+        rel.set("Id", rid)
+        rel.set("Type", ("http://schemas.openxmlformats.org/officeDocument/"
+                         "2006/relationships/hyperlink"))
+        rel.set("Target", url)
+        rel.set("TargetMode", "External")
+        existing[url] = rid
+        mapping[url] = rid
+    items[rels_name] = etree.tostring(rels_root, xml_declaration=True,
+                                      encoding="UTF-8", standalone=True)
+    return mapping
+
+
 def rebuild_bibliography(body, heading, used_keys, refs, style,
                          entry_num_style, bookmark_id_base,
                          citation_mode="numbered", font_en="", font_cn="",
                          indent=True, align="both", bold_num=False,
-                         hanging_pt=21.0, italic_source=True):
+                         hanging_pt=21.0, italic_source=True,
+                         items=None, hyperlink_style_id=None,
+                         year_suffix=None):
     """在标题段之后重建条目段：删除旧的（含 ref_ 书签的段），插入新条目。
        numbered   按出现顺序编号；
-       author-year 按作者字母序排列、不编号。"""
+       author-year 按作者字母序排列、不编号。
+       items 传入 zip 条目字典时，条目中的 DOI 会被渲染为可点击超链接。"""
     key_to_ref = {r["key"]: r for r in refs}
     # 收集标题后需要删除的旧条目段。
     # 判别规则：带 ref_ 书签的段必然是脚本生成的条目；无书签但以 [n] 开头
@@ -527,15 +670,22 @@ def rebuild_bibliography(body, heading, used_keys, refs, style,
     if citation_mode == "author-year":
         used_keys = sorted(used_keys,
                            key=lambda k: sort_key_ref(key_to_ref.get(k, {})))
+    doi_links = None
+    if items is not None:
+        doi_links = doi_links_for_entries(items, refs, used_keys)
+    year_suffix = year_suffix or {}
     anchor_el = heading
     bid = bookmark_id_base
     for num, key in enumerate(used_keys, 1):
         ref = key_to_ref.get(key)
         if ref is None:
             raise RuntimeError(f"引用表中找不到 key={key}")
+        if year_suffix.get(key):
+            ref = dict(ref, year=(ref.get("year") or "") + year_suffix[key])
         p = build_entry_paragraph(num, key, ref, style, entry_num_style, bid,
                                   citation_mode, font_en, font_cn, indent,
-                                  align, bold_num, hanging_pt, italic_source)
+                                  align, bold_num, hanging_pt, italic_source,
+                                  doi_links, hyperlink_style_id)
         anchor_el.addnext(p)
         anchor_el = p
         bid += 1
@@ -688,6 +838,9 @@ def main():
     bracket = args.bracket if len(args.bracket) == 2 else "[]"
     superscript = not args.no_superscript
     refs_by_key = {r["key"]: r for r in refs}
+    year_suffix = {}
+    if args.citation == "author-year":
+        year_suffix = compute_year_suffixes(used_keys, refs_by_key)
     main_doc = docs[main_idx]
     heading_style_id = find_style_id(main_doc["styles_root"],
                                      ["heading 1", "Heading 1", "标题 1", "1"])
@@ -697,7 +850,8 @@ def main():
     for x in docs:
         total_new += insert_hyperlinks(x["points"], bracket, superscript,
                                        hyperlink_style_id, args.citation,
-                                       refs_by_key, args.font_en, args.font_cn)
+                                       refs_by_key, args.font_en, args.font_cn,
+                                       year_suffix)
 
     # 4. 主文档参考文献表
     heading = find_or_create_heading(main_doc["body"], args.heading,
@@ -713,7 +867,9 @@ def main():
         main_doc["body"], heading, used_keys, refs, args.style,
         args.entry_num, bookmark_id_base, args.citation,
         args.font_en, args.font_cn, not args.no_indent, args.align,
-        args.bold_num, args.hanging_pt, not args.no_italic_source)
+        args.bold_num, args.hanging_pt, not args.no_italic_source,
+        items=main_doc["items"], hyperlink_style_id=hyperlink_style_id,
+        year_suffix=year_suffix)
 
     # 5. 非主文档：引用超链接指向主文档（跨文档跳转）
     cross_count = 0

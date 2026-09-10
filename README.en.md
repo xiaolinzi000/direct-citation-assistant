@@ -21,10 +21,10 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 | 🗂️ Auto workspace | One command creates the project folder (论文 / 引用目录 / 文献, i.e. drafts / citation list / PDFs) — automatically placed outside drive C: |
 | 🔍 Sentence-level judgment | A concrete checklist for deciding whether each sentence needs a citation, avoiding citation padding |
 | 🎯 Three search principles | Strongest evidence first → newest first → highest citation count; covers both Chinese & English literature |
-| 🔗 Hyperlink citations | In-text numbers (superscript by default) are **clickable and jump** to the matching entry in the reference list |
+| 🔗 Hyperlink citations | In-text numbers (superscript by default) are **clickable and jump** to the matching entry in the reference list; entry **DOIs are clickable too** and open the paper page |
 | 📚 Multi-doc chapters | Process several `.docx` chapters at once with one continuous numbering; citations **jump across documents** to the main document's reference list (verified in Word) |
 | 🔢 Auto renumbering | Re-run after deleting / adding a citation — numbers update automatically, no manual fixing |
-| 📑 Four formats | GB/T 7714 (default), APA, Vancouver, MLA; numbered + author-year styles |
+| 📑 Four formats | GB/T 7714 (default), APA, Vancouver, MLA; numbered + author-year (**a/b suffixes auto-applied for same author & year**) |
 | ✒️ Italic by spec | Western journal/book names automatically italic per GB/T 7714; Chinese journal names stay upright (`--no-italic-source` to disable) |
 | 🔎 Citation authenticity | **No fabricated references**: `verify_refs.py` checks each entry online via Crossref DOI / OpenAlex title — ✅ verified / ⚠️ mismatch / ❌ not found / 🔶 offline — plus field completeness & the `note` support sentence |
 | 🔗 Citation mapping | `insert_refs.py --mapping` prints a "in-text ↔ reference" table (number, sentence, `note`) to verify every citation actually backs its sentence |
@@ -47,7 +47,13 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 
 ## 🆕 What's New
 
-**v1.4.0 (latest)**
+**v1.5.0 (latest)**
+- 🔗 **Clickable DOIs**: DOIs in reference-list entries become hyperlinks straight to the paper page (External links, verified in Word, idempotent re-runs); GB format now renders DOIs as `https://doi.org/…`
+- 📑 **Author-year a/b suffixes**: same author & same year → auto `2023a`/`2023b` by title order, in both in-text labels and the list (per GB/T 7714)
+- 🔎 **note quality check**: `verify_refs.py` now flags a `note` shorter than 6 chars — spell out exactly which sentence/claim the paper backs
+- 📋 **Top-tier checklist**: SKILL.md adds a pre-submission checklist (authenticity / support / no fabrication / no extras & no gaps / format / in-text placement / ordering / recency / traceability)
+
+**v1.4.0**
 - 🔎 **Citation authenticity check** (new `verify_refs.py`): every reference verified online against Crossref DOI / OpenAlex title — ✅ verified / ⚠️ mismatch / ❌ not found (likely fabricated — fix or remove before writing into your paper) / 🔶 offline; `--offline` field-only, `--report` exports a check report — **no fake references make it into your paper**
 - 🔗 **Citation mapping** (`insert_refs.py --mapping`): prints an "in-text ↔ reference" table (number, sentence, `note` support sentence) to confirm each citation backs its sentence; the `note` field in refs.csv is now required
 
@@ -60,7 +66,7 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 - 🛡️ Fixed: body paragraphs after the reference heading are no longer deleted; clear hint when the document is open in Word; `.docx` only
 - 🧪 New `edge_test.py` boundary regression
 
-> Full version history (v1.0.0 → v1.4.0) in [CHANGELOG.md](CHANGELOG.md).
+> Full version history (v1.0.0 → v1.5.0) in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -226,6 +232,7 @@ python author_year_test.py   # scenario: author-year → alphabetical order + id
 python edge_test.py          # edge cases: Chinese keys / lowercase placeholders / no year / body-paragraph protection
 python multi_doc_test.py     # scenario: multi-chapter docs → continuous numbering + cross-doc jumps
 python verify_refs_test.py   # offline regression: field completeness / --offline / similarity
+python year_suffix_test.py   # scenario: author-year same author & year → auto a/b suffixes
 python verify_docx.py 文稿.docx   # structural integrity (hyperlink ↔ bookmark 1:1)
 ```
 
