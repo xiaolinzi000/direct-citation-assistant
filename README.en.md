@@ -2,6 +2,12 @@
 
 **[English](README.en.md) | [简体中文](README.md)**
 
+![GitHub stars](https://img.shields.io/github/stars/xiaolinzi000/direct-citation-assistant?style=flat-square&label=Stars)
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=flat-square)
+![Platform](https://img.shields.io/badge/Platform-Windows-blue?style=flat-square)
+![GB/T 7714](https://img.shields.io/badge/GB%2FT%207714-2015-green?style=flat-square)
+![No Zotero](https://img.shields.io/badge/No%20Zotero-%E2%9C%93-orange?style=flat-square)
+
 > A Zotero-free, script-driven citation workflow for Word: from "sentence-by-sentence citation judgment" → "literature search & filtering" → "clickable hyperlink citations" → "auto-generated reference list".
 
 Supports **journal papers, theses (proposal / mid-term reports), and course papers**, with mixed **Chinese & English references**. Reference formatting follows **GB/T 7714-2015** (default), plus APA / Vancouver / MLA.
@@ -23,6 +29,14 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 | ✒️ Auto typography | Chinese: SimSun (宋体) + Western/digits: Times New Roman; hanging indent 2 chars, justified, tab-aligned numbers |
 | 📄 PDF archiving | Downloaded papers renamed by title and archived; name collisions get numbered suffixes, never overwritten |
 | 💾 Auto backup | Every docx / refs.csv modification is backed up first (last 30 kept) |
+
+---
+
+## 📸 Screenshot
+
+![Demo: clickable superscript citations in the body + auto-generated reference list](assets/demo-screenshot.png)
+
+> A real rendered screenshot: three superscript citations `[1][1][2]` in the body are clickable and jump to the matching entries; the 「参考文献」 list at the end is auto-generated with a 2-character hanging indent, tab-aligned numbers, and a 1:1 match with the in-text citations. Demo assets and automated tests are included — you can reproduce it yourself.
 
 ---
 
@@ -139,6 +153,8 @@ direct-citation-assistant/
 ├── SKILL.md                 # skill master file (workflow + checklists + flags)
 ├── README.md                # this doc (Chinese)
 ├── README.en.md             # English version
+├── assets/
+│   └── demo-screenshot.png  # rendered demo screenshot
 ├── references/
 │   └── websites.md          # literature-search site list (status maintained by script)
 ├── scripts/

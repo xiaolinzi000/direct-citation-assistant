@@ -2,6 +2,12 @@
 
 **[English](README.en.md) | 简体中文**
 
+![GitHub stars](https://img.shields.io/github/stars/xiaolinzi000/direct-citation-assistant?style=flat-square&label=Stars)
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=flat-square)
+![Platform](https://img.shields.io/badge/Platform-Windows-blue?style=flat-square)
+![GB/T 7714](https://img.shields.io/badge/GB%2FT%207714-2015-green?style=flat-square)
+![No Zotero](https://img.shields.io/badge/No%20Zotero-%E2%9C%93-orange?style=flat-square)
+
 > 不依赖 Zotero，纯脚本驱动，在 Word 里完成从「逐句判断引用 → 检索筛选文献 → 插入可点击超链接引用 → 自动生成参考文献目录」的完整论文引用工作流。
 
 适用于**期刊论文、毕业论文（开题报告 / 中期报告）、课程论文**三种场景，支持**中英文文献**混合引用，参考文献格式符合 **GB/T 7714-2015**（默认），另支持 APA / Vancouver / MLA。
@@ -23,6 +29,14 @@
 | ✒️ 字体版式自动 | 中文宋体 + 英文/数字 Times New Roman；悬挂缩进 2 字符、两端对齐、编号 Tab 对齐 |
 | 📄 PDF 归档 | 下载的论文按题名自动匹配重命名归档，重名不覆盖 |
 | 💾 自动备份 | 每次修改 docx / refs.csv 前自动备份（保留最近 30 份） |
+
+---
+
+## 📸 效果预览
+
+![演示效果：正文可点击上标引用 + 文末参考文献目录](assets/demo-screenshot.png)
+
+> 上图为真实渲染截图：正文三处上标 `[1][1][2]` 可点击跳转，文末「参考文献」自动生成、悬挂缩进 2 字符、编号 Tab 对齐、条目与正文一一对应。本仓库含演示素材与自动化测试，可自行复现。
 
 ---
 
@@ -137,6 +151,10 @@ python scripts/insert_refs.py --docx <项目>/论文/文稿.docx ^
 ```
 direct-citation-assistant/
 ├── SKILL.md                 # 技能主文件（完整工作流 + 判定清单 + 参数说明）
+├── README.md                # 项目介绍（中文）
+├── README.en.md             # 项目介绍（英文）
+├── assets/
+│   └── demo-screenshot.png  # 演示效果截图
 ├── references/
 │   └── websites.md          # 文献检索网站清单（状态由脚本维护）
 ├── scripts/
