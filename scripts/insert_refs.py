@@ -21,11 +21,20 @@ insert_refs.py — 在 Word 文档中插入/更新带超链接的论文引用（
   python insert_refs.py --docx 文稿.docx --dry-run      # 只打印计划不写文件
   常用参数：
     --style gbt7714|apa|vancouver|mla   参考文献格式（默认 gbt7714）
+    --citation numbered|author-year     编号制（默认，正文 [1] 上标）/
+                                       作者-年份制（正文 (Smith et al., 2023)）
     --heading 参考文献                   自定义标题文本（找不到时创建）
     --no-superscript                    正文编号不用上标
     --bracket ()                        正文编号括号（默认 []）
     --entry-num num|bracket             文末条目编号样式（默认 bracket -> [1]）
+    --font-en "Times New Roman"         西文/数字字体（默认 Times New Roman）
+    --font-cn "宋体"                     中文字体（默认宋体）
+    --no-indent                         关闭条目悬挂缩进（默认缩进 2 字符）
+    --hanging-pt 21                     悬挂缩进量 pt（五号 21 / 小四 24 / 四号 28）
+    --align both|left|""                条目对齐（默认 both 两端对齐）
+    --bold-num                          条目编号加粗（默认不加粗）
     --backup-dir 路径                    备份目录（默认 docx 同目录 _backup）
+    --dry-run                           只打印计划不写文件
 """
 
 import argparse
@@ -45,7 +54,7 @@ from refs_db import load_refs
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W}
-CITE_RE = re.compile(r"\[CITE:([A-Za-z0-9_\-]+)\]")
+CITE_RE = re.compile(r"\[CITE:([A-Za-z0-9_\-\u4e00-\u9fff.]+)\]", re.IGNORECASE)
 ANY_RE = re.compile(r"\[\?\]")
 # 旧引用识别：编号制 [1] 或 (1)（bracket () 场景），或 author-year (Author, 2023)
 OLD_REF_RE = re.compile(r"^\[\d+\]$|^\(\d+\)$|^\([^()]*\d{4}[^()]*\)$")
@@ -76,14 +85,25 @@ def load_docx(path):
 
 
 def save_docx(path, items, doc_root):
-    """写回 docx（仅替换 document.xml，其余原样保留）。"""
+    """写回 docx（仅替换 document.xml，其余原样保留）。
+    Word 独占锁定时会失败，给出可操作的提示。"""
     items["word/document.xml"] = etree.tostring(doc_root, xml_declaration=True,
                                                 encoding="UTF-8", standalone=True)
     tmp = path + ".tmp"
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-        for name, data in items.items():
-            z.writestr(name, data)
-    os.replace(tmp, path)
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, data in items.items():
+                z.writestr(name, data)
+        os.replace(tmp, path)
+    except PermissionError:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        raise RuntimeError(
+            f"无法写入文档（可能正被 Word 打开）：{path}\n"
+            "请先关闭该文档的 Word 窗口，再重新运行本脚本。")
 
 
 def backup_docx(path, backup_dir=None, keep=30):
@@ -92,7 +112,12 @@ def backup_docx(path, backup_dir=None, keep=30):
     os.makedirs(target_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     bpath = os.path.join(target_dir, f"{ts}__{os.path.basename(path)}")
-    shutil.copy2(path, bpath)
+    try:
+        shutil.copy2(path, bpath)
+    except PermissionError:
+        raise RuntimeError(
+            f"无法备份文档（可能正被 Word 打开）：{path}\n"
+            "请先关闭该文档的 Word 窗口，再重新运行本脚本。")
     # 清理：同目标文件名前缀，保留最新的 keep 份
     prefix = f"__{os.path.basename(path)}"
     try:
@@ -315,8 +340,9 @@ def make_label(pt, bracket, citation_mode, refs_by_key):
                 suffix = "等" if _is_cjk(first) else " et al."
             else:
                 suffix = ""
-            return f"({surname}{suffix}, {year})"
-        return f"({year})"
+            name = f"{surname}{suffix}"
+            return f"({name}, {year})" if year else f"({name})"
+        return f"({year})" if year else "(?)"
     return f"{bracket[0]}{pt['num']}{bracket[1]}"
 
 
@@ -451,9 +477,13 @@ def rebuild_bibliography(body, heading, used_keys, refs, style,
        numbered   按出现顺序编号；
        author-year 按作者字母序排列、不编号。"""
     key_to_ref = {r["key"]: r for r in refs}
-    # 收集标题后需要删除的旧条目段
+    # 收集标题后需要删除的旧条目段。
+    # 判别规则：带 ref_ 书签的段必然是脚本生成的条目；无书签但以 [n] 开头
+    # 的段，仅当它紧跟在条目段之后（兼容历史上无书签的旧条目）才视为条目，
+    # 否则视为正文/附录段并停止清理——防止把参考文献标题后的正文误删。
     old_entries = []
     after = False
+    prev_entry = False
     for child in body:
         if after:
             if child.tag == w("p"):
@@ -463,13 +493,20 @@ def rebuild_bibliography(body, heading, used_keys, refs, style,
                     (bs.get(w("name")) or "").startswith("ref_")
                     for bs in child.iter(w("bookmarkStart")))
                 txt = para_text(child).strip()
-                if has_ref_bookmark or ENTRY_START_RE.match(txt):
+                if has_ref_bookmark:
                     old_entries.append(child)
+                    prev_entry = True
+                elif ENTRY_START_RE.match(txt) and prev_entry:
+                    old_entries.append(child)
+                    prev_entry = True
+                elif txt:
+                    # 非空非条目段（正文/附录/其他内容）即停止清理
+                    break
                 else:
-                    # 遇到非条目段（如空段）也清理掉条目区后停下？——保守：非条目段保留
-                    pass
+                    prev_entry = False  # 空段（空行分隔）跳过，继续扫描
         if child is heading:
             after = True
+            prev_entry = False
     for e in old_entries:
         body.remove(e)
     # 插入新条目（标题段之后）
@@ -526,6 +563,10 @@ def main():
     docx = os.path.abspath(args.docx)
     if not os.path.exists(docx):
         print(f"找不到文档：{docx}")
+        sys.exit(1)
+    if not docx.lower().endswith(".docx"):
+        print(f"只支持 .docx 文档（当前：{docx}）。")
+        print("若为 .doc 格式，请先在 Word 中「另存为」.docx 后再运行。")
         sys.exit(1)
     refs_path = args.refs or os.path.join(os.path.dirname(docx), "refs.csv")
     if not os.path.exists(refs_path):
