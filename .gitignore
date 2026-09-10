@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 预览/备份
+.preview/
+scripts/demo/_backup/
+
+# 测试生成物
+scripts/demo/文稿2.docx
+
+# 系统
+Thumbs.db
+.DS_Store
+
+# Word 锁文件
+~$*

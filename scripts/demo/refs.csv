@@ -1,0 +1,4 @@
+﻿key,type,title,authors,source,year,volume,issue,pages,doi,url,note
+vaswani2017,journal,Attention is all you need,"Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, L., Polosukhin, I.",Advances in Neural Information Processing Systems,2017,30,,,10.5555/3295222.3295349,,Transformer 原始出处
+devlin2019,journal,BERT: Pre-training of deep bidirectional transformers for language understanding,"Devlin, J., Chang, M.-W., Lee, K., Toutanova, K.",Proceedings of NAACL-HLT,2019,,,4171-4186,10.18653/v1/N19-1423,,预训练模型代表工作
+zhang2023,journal,大语言模型研究进展综述,"张三, 李四, 王五",计算机学报,2023,46,5,1000-1020,10.7544/issn1000-1239.2023.xxxxx,,中文综述示例
