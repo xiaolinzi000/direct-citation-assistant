@@ -57,7 +57,10 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 
 ## 🆕 What's New
 
-**v1.7.0 (latest)**
+**v1.7.1 (latest)**
+- 🖱️ **One-click batch scripts**: `转占位符草稿.bat` (drag a docx onto it → convert to plain-text draft) and `恢复引用.bat` (drag the AI-edited docx → restore hyperlinks/numbering/bibliography, auto-runs `--mapping` for the check table) — no need to memorize commands
+
+**v1.7.0**
 - 🤖 **"AI edits killed my hyperlinks" is now solved**: new `insert_refs.py --to-placeholders` — before handing the paper to an AI/editor, convert citation hyperlinks back into plain-text `[CITE:key]` placeholders and drop the bibliography; any text editing can't break them, and re-running the script afterwards restores hyperlinks, numbering and the bibliography (verified end-to-end: python-docx rewrite → re-run → all 3 citations restored)
 
 **v1.6.1**
@@ -86,7 +89,7 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 - 🛡️ Fixed: body paragraphs after the reference heading are no longer deleted; clear hint when the document is open in Word; `.docx` only
 - 🧪 New `edge_test.py` boundary regression
 
-> Full version history (v1.0.0 → v1.7.0) in [CHANGELOG.md](CHANGELOG.md).
+> Full version history (v1.0.0 → v1.7.1) in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
