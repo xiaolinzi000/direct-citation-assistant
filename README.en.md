@@ -164,6 +164,7 @@ direct-citation-assistant/
 ├── SKILL.md                 # skill master file (workflow + checklists + flags)
 ├── README.md                # this doc (Chinese)
 ├── README.en.md             # English version
+├── CHANGELOG.md             # version history
 ├── assets/
 │   └── demo-screenshot.png  # rendered demo screenshot
 ├── references/

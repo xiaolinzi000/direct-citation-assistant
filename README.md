@@ -164,6 +164,7 @@ direct-citation-assistant/
 ├── SKILL.md                 # 技能主文件（完整工作流 + 判定清单 + 参数说明）
 ├── README.md                # 项目介绍（中文）
 ├── README.en.md             # 项目介绍（英文）
+├── CHANGELOG.md             # 版本升级说明
 ├── assets/
 │   └── demo-screenshot.png  # 演示效果截图
 ├── references/
