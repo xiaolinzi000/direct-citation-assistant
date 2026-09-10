@@ -1,4 +1,14 @@
-# Direct Citation Assistant 直接论文引用助手
+<div align="center">
+
+# ✨ 想要一键引用全文的参考文献吗？
+
+## ⚡ 想省下大把劳动力和时间吗？
+
+### 🎯 那就用这个 skill 吧！
+
+**Direct Citation Assistant · 直接论文引用助手**
+
+</div>
 
 **[English](README.en.md) | 简体中文**
 

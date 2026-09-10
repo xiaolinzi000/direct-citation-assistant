@@ -1,4 +1,14 @@
-# Direct Citation Assistant
+<div align="center">
+
+# ✨ Want one-click references for your whole paper?
+
+## ⚡ Want to save tons of time and effort?
+
+### 🎯 Just use this skill!
+
+**Direct Citation Assistant**
+
+</div>
 
 **[English](README.en.md) | [简体中文](README.md)**
 
