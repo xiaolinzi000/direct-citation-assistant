@@ -18,6 +18,10 @@ insert_refs.py — 在 Word 文档中插入/更新带超链接的论文引用（
 
 用法：
   python insert_refs.py --docx 文稿.docx --refs refs.csv [--style gbt7714]
+  python insert_refs.py --docx 第1章.docx 第2章.docx 第3章.docx ^
+      --refs refs.csv            # 分章论文：全文统一编号，文末表生成在最后一个文档
+  python insert_refs.py --docx 第1章.docx 第2章.docx --main 第2章.docx
+                                 # 指定主文档（参考文献表所在，默认最后一个）
   python insert_refs.py --docx 文稿.docx --dry-run      # 只打印计划不写文件
   常用参数：
     --style gbt7714|apa|vancouver|mla   参考文献格式（默认 gbt7714）
@@ -33,6 +37,8 @@ insert_refs.py — 在 Word 文档中插入/更新带超链接的论文引用（
     --hanging-pt 21                     悬挂缩进量 pt（五号 21 / 小四 24 / 四号 28）
     --align both|left|""                条目对齐（默认 both 两端对齐）
     --bold-num                          条目编号加粗（默认不加粗）
+    --no-italic-source                  关闭出处（西文期刊名/书名）斜体（默认按规范斜体）
+    --main 路径                         多文档时指定主文档（默认最后一个 --docx）
     --backup-dir 路径                    备份目录（默认 docx 同目录 _backup）
     --dry-run                           只打印计划不写文件
 """
@@ -49,11 +55,13 @@ from datetime import datetime
 from lxml import etree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from format_refs import format_ref
+from format_refs import format_ref_segments
 from refs_db import load_refs
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W}
+R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+P_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 CITE_RE = re.compile(r"\[CITE:([A-Za-z0-9_\-\u4e00-\u9fff.]+)\]", re.IGNORECASE)
 ANY_RE = re.compile(r"\[\?\]")
 # 旧引用识别：编号制 [1] 或 (1)（bracket () 场景），或 author-year (Author, 2023)
@@ -425,7 +433,7 @@ def sort_key_ref(ref):
 def build_entry_paragraph(num, key, ref, style, entry_num_style, bookmark_id,
                           citation_mode="numbered", font_en="", font_cn="",
                           indent=True, align="both", bold_num=False,
-                          hanging_pt=21.0):
+                          hanging_pt=21.0, italic_source=True):
     p = etree.Element(w("p"))
     # 段落格式：通行惯例「悬挂缩进 2 字符」（国标未强制版式，可 --no-indent 关闭）。
     # 必须用 twips 单位 w:left/w:hanging（=2字符×字号），leftChars/hangingChars 在
@@ -456,12 +464,18 @@ def build_entry_paragraph(num, key, ref, style, entry_num_style, bookmark_id,
         t1.text = prefix
         rtab = etree.SubElement(p, w("r"))
         tab = etree.SubElement(rtab, w("tab"))  # 制表符：内容推进到悬挂缩进位置
-    # 条目文本（中英文混排：中文宋体、英文/数字 Times New Roman）
-    r2 = etree.SubElement(p, w("r"))
-    r2pr = etree.SubElement(r2, w("rPr"))
-    set_run_fonts(r2pr, font_en, font_cn)
-    t2 = etree.SubElement(r2, w("t"))
-    t2.text = format_ref(ref, style)
+    # 条目文本分段渲染：中英文混排（中文宋体、英文/数字 Times New Roman），
+    # 西文期刊名/书名等规范斜体部分拆为独立 run（加 <w:i/>）
+    for text, italic in format_ref_segments(ref, style):
+        if italic and not italic_source:
+            italic = False
+        r2 = etree.SubElement(p, w("r"))
+        r2pr = etree.SubElement(r2, w("rPr"))
+        set_run_fonts(r2pr, font_en, font_cn)
+        if italic:
+            etree.SubElement(r2pr, w("i"))
+        t2 = etree.SubElement(r2, w("t"))
+        t2.text = text
     # 书签结束
     be = etree.SubElement(p, w("bookmarkEnd"))
     be.set(w("id"), str(bookmark_id))
@@ -472,7 +486,7 @@ def rebuild_bibliography(body, heading, used_keys, refs, style,
                          entry_num_style, bookmark_id_base,
                          citation_mode="numbered", font_en="", font_cn="",
                          indent=True, align="both", bold_num=False,
-                         hanging_pt=21.0):
+                         hanging_pt=21.0, italic_source=True):
     """在标题段之后重建条目段：删除旧的（含 ref_ 书签的段），插入新条目。
        numbered   按出现顺序编号；
        author-year 按作者字母序排列、不编号。"""
@@ -521,18 +535,68 @@ def rebuild_bibliography(body, heading, used_keys, refs, style,
             raise RuntimeError(f"引用表中找不到 key={key}")
         p = build_entry_paragraph(num, key, ref, style, entry_num_style, bid,
                                   citation_mode, font_en, font_cn, indent,
-                                  align, bold_num, hanging_pt)
+                                  align, bold_num, hanging_pt, italic_source)
         anchor_el.addnext(p)
         anchor_el = p
         bid += 1
     return len(used_keys)
 
 
+# ---------- 跨文档链接 ----------
+
+def add_cross_doc_links(items, doc_root, main_path, this_path):
+    """把本文档中的引用超链接指向主文档（跨文档跳转）：
+    document.xml.rels 增加 External 关系（Target=主文档相对路径），
+    hyperlink 增加 r:id；已有 r:id 的跳过（重跑幂等）。返回新增链接数。
+    用于分章论文：各章文档的 [n] 点击后打开主文档并跳转到对应文献条目。"""
+    rels_name = "word/_rels/document.xml.rels"
+    rels_root = None
+    if rels_name in items:
+        try:
+            rels_root = etree.fromstring(items[rels_name])
+        except Exception:
+            rels_root = None
+    if rels_root is None:
+        rels_root = etree.Element(f"{{{P_REL}}}Relationships")
+    max_id = 0
+    for rel in rels_root:
+        m = re.match(r"rId(\d+)", rel.get("Id") or "")
+        if m:
+            max_id = max(max_id, int(m.group(1)))
+    rel_path = os.path.relpath(main_path,
+                               os.path.dirname(os.path.abspath(this_path)))
+    rel_path = rel_path.replace("\\", "/")
+    count = 0
+    for h in doc_root.iter(w("hyperlink")):
+        anchor = h.get(w("anchor")) or ""
+        if not anchor.startswith("ref_"):
+            continue
+        if h.get(f"{{{R_NS}}}id"):
+            continue
+        max_id += 1
+        rid = f"rId{max_id}"
+        h.set(f"{{{R_NS}}}id", rid)
+        rel = etree.SubElement(rels_root, f"{{{P_REL}}}Relationship")
+        rel.set("Id", rid)
+        rel.set("Type", ("http://schemas.openxmlformats.org/officeDocument/"
+                         "2006/relationships/hyperlink"))
+        rel.set("Target", rel_path)
+        rel.set("TargetMode", "External")
+        count += 1
+    items[rels_name] = etree.tostring(rels_root, xml_declaration=True,
+                                      encoding="UTF-8", standalone=True)
+    return count
+
+
 # ---------- 主流程 ----------
 
 def main():
-    ap = argparse.ArgumentParser(description="Word 文档插入/更新带超链接的论文引用")
-    ap.add_argument("--docx", required=True, help="Word 文档路径")
+    ap = argparse.ArgumentParser(
+        description="Word 文档插入/更新带超链接的论文引用（支持多文档分章统一编号）")
+    ap.add_argument("--docx", required=True, nargs="+",
+                    help="Word 文档路径（可多个：分章论文全文统一编号，如 --docx 第1章.docx 第2章.docx）")
+    ap.add_argument("--main", default=None,
+                    help="主文档路径（参考文献表所在，默认最后一个 --docx）")
     ap.add_argument("--refs", default=None, help="refs.csv 路径（默认 docx 同目录）")
     ap.add_argument("--style", default="gbt7714",
                     choices=["gbt7714", "apa", "vancouver", "mla"])
@@ -558,17 +622,29 @@ def main():
                     help="文献编号加粗（默认不加粗，通行惯例与条目同格式）")
     ap.add_argument("--hanging-pt", type=float, default=21.0,
                     help="悬挂缩进量 pt（2 字符×正文字号：五号 21 / 小四 24 / 四号 28，默认 21）")
+    ap.add_argument("--no-italic-source", action="store_true",
+                    help="关闭出处（西文期刊名/书名）斜体（默认按 GB/T 7714 规范斜体）")
     args = ap.parse_args()
 
-    docx = os.path.abspath(args.docx)
-    if not os.path.exists(docx):
-        print(f"找不到文档：{docx}")
-        sys.exit(1)
-    if not docx.lower().endswith(".docx"):
-        print(f"只支持 .docx 文档（当前：{docx}）。")
-        print("若为 .doc 格式，请先在 Word 中「另存为」.docx 后再运行。")
-        sys.exit(1)
-    refs_path = args.refs or os.path.join(os.path.dirname(docx), "refs.csv")
+    docx_list = [os.path.abspath(d) for d in args.docx]
+    for d in docx_list:
+        if not os.path.exists(d):
+            print(f"找不到文档：{d}")
+            sys.exit(1)
+        if not d.lower().endswith(".docx"):
+            print(f"只支持 .docx 文档（当前：{d}）。")
+            print("若为 .doc 格式，请先在 Word 中「另存为」.docx 后再运行。")
+            sys.exit(1)
+    if args.main:
+        main_abs = os.path.abspath(args.main)
+        if main_abs not in docx_list:
+            print(f"--main 不在 --docx 列表中：{args.main}")
+            sys.exit(1)
+        main_idx = docx_list.index(main_abs)
+    else:
+        main_idx = len(docx_list) - 1
+
+    refs_path = args.refs or os.path.join(os.path.dirname(docx_list[0]), "refs.csv")
     if not os.path.exists(refs_path):
         print(f"找不到引用表：{refs_path}")
         print("提示：工作区结构为 <项目>/引用目录/refs.csv，请用 --refs 显式指定；")
@@ -578,55 +654,77 @@ def main():
     if not refs:
         print(f"引用表为空：{refs_path}，先用 add_refs.py 添加文献。")
         sys.exit(1)
-    print(f"引用表：{refs_path}（{len(refs)} 条）")
+    print(f"引用表：{refs_path}（{len(refs)} 条）｜文档 {len(docx_list)} 份"
+          f"（主文档：{os.path.basename(docx_list[main_idx])}）")
 
-    items, doc_root, styles_root = load_docx(docx)
-    body = doc_root.find(w("body"))
-    if body is None:
-        print("文档结构异常（无 body）。")
-        sys.exit(1)
-
-    # 样式探测
-    heading_style_id = find_style_id(styles_root,
-                                     ["heading 1", "Heading 1", "标题 1", "1"])
-    hyperlink_style_id = find_style_id(styles_root, ["Hyperlink", "超链接"])
-
-    # 1. 收集引用点
-    points = collect_points(body)
-    if not points:
+    # 1. 读入全部文档并收集引用点
+    docs = []
+    for d in docx_list:
+        items, doc_root, styles_root = load_docx(d)
+        body = doc_root.find(w("body"))
+        if body is None:
+            print(f"文档结构异常（无 body）：{d}")
+            sys.exit(1)
+        points = collect_points(body)
+        docs.append({"path": d, "items": items, "root": doc_root,
+                     "body": body, "styles_root": styles_root, "points": points})
+    if not any(x["points"] for x in docs):
         print("正文中未找到引用点（[?] / [CITE:key] / 上次生成的引用超链接）。")
         print("在需要引用的句子末尾放 [?] 或 [CITE:key] 后重跑。")
         sys.exit(1)
 
-    # 2. 编号
-    points, key_to_num, used_keys = assign_numbers(points, refs)
+    # 2. 全局编号（跨文档连续）
+    flat = [pt for x in docs for pt in x["points"]]
+    flat, key_to_num, used_keys = assign_numbers(flat, refs)
+    idx = 0
+    for x in docs:
+        n = len(x["points"])
+        x["points"] = flat[idx:idx + n]
+        idx += n
 
-    # 3. 更新/插入正文引用
+    # 3. 更新/插入正文引用（样式取自主文档）
     bracket = args.bracket if len(args.bracket) == 2 else "[]"
     superscript = not args.no_superscript
     refs_by_key = {r["key"]: r for r in refs}
-    new_count = insert_hyperlinks(points, bracket, superscript,
-                                  hyperlink_style_id, args.citation,
-                                  refs_by_key, args.font_en, args.font_cn)
+    main_doc = docs[main_idx]
+    heading_style_id = find_style_id(main_doc["styles_root"],
+                                     ["heading 1", "Heading 1", "标题 1", "1"])
+    hyperlink_style_id = find_style_id(main_doc["styles_root"],
+                                       ["Hyperlink", "超链接"])
+    total_new = 0
+    for x in docs:
+        total_new += insert_hyperlinks(x["points"], bracket, superscript,
+                                       hyperlink_style_id, args.citation,
+                                       refs_by_key, args.font_en, args.font_cn)
 
-    # 4. 参考文献表
-    heading = find_or_create_heading(body, args.heading, heading_style_id)
+    # 4. 主文档参考文献表
+    heading = find_or_create_heading(main_doc["body"], args.heading,
+                                     heading_style_id)
     bookmark_id_base = 1
-    for bs in doc_root.iter(w("bookmarkStart")):
+    for bs in main_doc["root"].iter(w("bookmarkStart")):
         try:
             bookmark_id_base = max(bookmark_id_base,
                                    int(bs.get(w("id"), 1)) + 1)
         except ValueError:
             pass
-    entry_count = rebuild_bibliography(body, heading, used_keys, refs,
-                                       args.style, args.entry_num,
-                                       bookmark_id_base, args.citation,
-                                       args.font_en, args.font_cn,
-                                       not args.no_indent, args.align,
-                                       args.bold_num, args.hanging_pt)
+    entry_count = rebuild_bibliography(
+        main_doc["body"], heading, used_keys, refs, args.style,
+        args.entry_num, bookmark_id_base, args.citation,
+        args.font_en, args.font_cn, not args.no_indent, args.align,
+        args.bold_num, args.hanging_pt, not args.no_italic_source)
 
-    print(f"引用点：{len(points)} 处（新增 {new_count}、保留更新 {len(points) - new_count}）"
-          f"｜参考文献条目：{entry_count} 条")
+    # 5. 非主文档：引用超链接指向主文档（跨文档跳转）
+    cross_count = 0
+    for i, x in enumerate(docs):
+        if i == main_idx:
+            continue
+        cross_count += add_cross_doc_links(x["items"], x["root"],
+                                           main_doc["path"], x["path"])
+
+    total_points = len(flat)
+    print(f"引用点：{total_points} 处（新增 {total_new}、保留更新 {total_points - total_new}）"
+          f"｜参考文献条目：{entry_count} 条"
+          f"｜跨文档链接：{cross_count}")
     if args.citation == "numbered":
         print("编号方案：", ", ".join(f"{k}->{n}" for k, n in key_to_num.items()))
     else:
@@ -636,37 +734,42 @@ def main():
         print("--dry-run：未写文件。")
         return
 
-    bpath = backup_docx(docx, args.backup_dir)
-    save_docx(docx, items, doc_root)
-    print(f"已写入：{docx}")
-    print(f"原文件已备份：{bpath}")
+    # 6. 备份并保存全部文档
+    for x in docs:
+        bpath = backup_docx(x["path"], args.backup_dir)
+        save_docx(x["path"], x["items"], x["root"])
+        print(f"已写入：{x['path']}（原文件备份：{bpath}）")
 
-    # 5. 回读验证
-    items2, doc_root2, _ = load_docx(docx)
-    body2 = doc_root2.find(w("body"))
-    hyps = [el for el in body2.iter(w("hyperlink"))
-            if is_ref_hyperlink(el)]
-    bookmarks = [bs.get(w("name")) for bs in doc_root2.iter(w("bookmarkStart"))
+    # 7. 回读验证
+    all_nums = []
+    for i, x in enumerate(docs):
+        items2, doc_root2, _ = load_docx(x["path"])
+        body2 = doc_root2.find(w("body"))
+        hyps = [el for el in body2.iter(w("hyperlink"))
+                if is_ref_hyperlink(el)]
+        txt_all = para_text(body2)
+        leftovers = CITE_RE.findall(txt_all) + ANY_RE.findall(txt_all)
+        tag = "（主文档）" if i == main_idx else ""
+        print(f"回读验证[{os.path.basename(x['path'])}{tag}]："
+              f"正文引用 {len(hyps)} 个｜残留占位符 {len(leftovers)} 个")
+        if leftovers:
+            print("警告：仍有占位符残留：", leftovers)
+        if args.citation == "numbered":
+            for h in hyps:
+                m = re.search(r"\d+", "".join(run_text(r) for r in h.findall(w("r"))))
+                if m:
+                    all_nums.append(int(m.group()))
+    if args.citation == "numbered":
+        if set(all_nums) != set(range(1, entry_count + 1)):
+            print(f"警告：编号不连续！全文正文编号 {sorted(all_nums)}，条目 {entry_count}，"
+                  f"缺失 {set(range(1, entry_count + 1)) - set(all_nums)}")
+        else:
+            print("编号连续性验证通过（全文跨文档）。")
+    bookmarks = [bs.get(w("name")) for bs in main_doc["root"].iter(w("bookmarkStart"))
                  if (bs.get(w("name")) or "").startswith("ref_")]
-    txt_all = para_text(body2)
-    leftovers = CITE_RE.findall(txt_all) + ANY_RE.findall(txt_all)
-    print(f"回读验证：正文引用 {len(hyps)} 个｜文末书签 {len(bookmarks)} 个"
-          f"｜残留占位符 {len(leftovers)} 个")
+    print(f"文末书签 {len(bookmarks)} 个")
     if len(set(bookmarks)) != len(bookmarks):
         print("警告：书签名重复！")
-    if leftovers:
-        print("警告：仍有占位符残留：", leftovers)
-    if args.citation == "numbered":
-        nums = []
-        for h in hyps:
-            m = re.search(r"\d+", "".join(run_text(r) for r in h.findall(w("r"))))
-            if m:
-                nums.append(int(m.group()))
-        if set(nums) != set(range(1, entry_count + 1)):
-            print(f"警告：编号不连续！正文编号 {sorted(nums)}，条目 {entry_count}，"
-                  f"缺失 {set(range(1, entry_count + 1)) - set(nums)}")
-        else:
-            print("编号连续性验证通过。")
 
 
 if __name__ == "__main__":

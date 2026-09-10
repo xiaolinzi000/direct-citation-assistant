@@ -22,10 +22,13 @@
 | 🔍 逐句判断引用 | 明确「这句要不要引」的判断清单，避免堆砌引用 |
 | 🎯 选文三原则 | 强证据优先 → 越新越好 → 高引用/高评分，中英文文献都覆盖 |
 | 🔗 超链接引用 | 正文编号（默认上标）**点击即跳转**到文末对应文献条目 |
+| 📚 分章论文支持 | 一次处理多份 `.docx` 全文统一编号，各章引用**跨文档跳转**到主文档文献表（Word 实测可用） |
 | 🔢 自动重编号 | 删除 / 新增引用后重跑脚本，编号自动连续更新，无需手工改 |
 | 📑 四种格式 | GB/T 7714（默认）、APA、Vancouver、MLA；编号制 + 作者-年份制 |
+| ✒️ 规范斜体 | 西文期刊名/书名按 GB/T 7714 自动斜体、中文刊名正体（`--no-italic-source` 关闭） |
 | 🌐 网站检查 | 18 个文献检索网站内置清单，代码自动检查可用性并支持定时更新 |
 | 📝 国标格式完整 | 期刊、会议、**专著 [M]、学位论文 [D]、网页 [EB/OL]** 均按 GB/T 7714 输出 |
+| 🀄 中文友好 | 占位符支持中文 key（`[CITE:注意力机制]`）、大小写不敏感；中文文献/中文期刊名自动处理 |
 | ✒️ 字体版式自动 | 中文宋体 + 英文/数字 Times New Roman；悬挂缩进 2 字符、两端对齐、编号 Tab 对齐 |
 | 📄 PDF 归档 | 下载的论文按题名自动匹配重命名归档，重名不覆盖 |
 | 💾 自动备份 | 每次修改 docx / refs.csv 前自动备份（保留最近 30 份） |
@@ -80,17 +83,25 @@ python scripts/add_refs.py --refs <项目>/引用目录/refs.csv ^
 
 ### 3. 正文放占位符，插入引用
 
-在 Word 正文需要引用的句子末尾放 `[?]`（按顺序自动取表内下一条）或 `[CITE:key]`（指定引用某条）：
+在 Word 正文需要引用的句子末尾放 `[?]`（按顺序自动取表内下一条）或 `[CITE:key]`（指定引用某条，大小写不敏感，支持中文 key）：
 
 ```bash
 python scripts/insert_refs.py --docx <项目>/论文/文稿.docx ^
     --refs <项目>/引用目录/refs.csv --style gbt7714 --citation numbered
 ```
 
+**分章论文**（毕业论文常用）：一次传入所有章节，全文统一编号，参考文献表自动生成在最后一章末尾，各章正文引用可跨文档跳转：
+
+```bash
+python scripts/insert_refs.py --docx <项目>/论文/第1章.docx <项目>/论文/第2章.docx ^
+    --refs <项目>/引用目录/refs.csv
+```
+
 生成效果：
 
 - 正文引用变为可点击上标 `[1]`（Ctrl+点击跳转到文末对应条目）；
 - 文末自动生成「参考文献」标题与目录（没有标题会自动创建）；
+- 西文期刊名/书名按 GB/T 7714 自动斜体；
 - 删除中间某处引用后再跑一次，其余编号自动重排。
 
 ---
@@ -132,11 +143,11 @@ python scripts/insert_refs.py --docx <项目>/论文/文稿.docx ^
 | `new_project.py` | 创建项目工作区（C 盘外三子目录 + refs.csv 模板） |
 | `add_refs.py` | 把题录写入 refs.csv（参数 / 交互模式，校验 type，自动备份） |
 | `rename_papers.py` | 下载的 PDF 按题名匹配重命名归档（重名自动加序号） |
-| `insert_refs.py` | **核心**：占位符 → 超链接引用；文末目录生成/更新；自动重编号 |
+| `insert_refs.py` | **核心**：占位符 → 超链接引用；文末目录生成/更新；自动重编号；支持多文档分章统一编号与跨文档跳转；默认西文期刊名斜体 |
 | `format_refs.py` | 单条题录按 gbt7714 / apa / vancouver / mla 渲染 |
 | `refs_db.py` | refs.csv 读写工具库（含 city 字段的国标完整格式） |
 | `check_websites.py` | 18 个文献检索网站可用性检查（确定性代码判定，`--update` 写回清单） |
-| `demo/*` | 演示素材与自动化测试（`make_demo.py`、`renumber_test.py`、`author_year_test.py`、`verify_docx.py`） |
+| `demo/*` | 演示素材与自动化测试（`make_demo.py`、`renumber_test.py`、`author_year_test.py`、`edge_test.py`、`multi_doc_test.py`、`verify_docx.py`） |
 
 ### 文献检索网站清单与定时检查
 
@@ -178,6 +189,8 @@ cd scripts/demo
 python make_demo.py          # 生成演示素材（refs.csv + 文稿.docx）
 python renumber_test.py      # 场景：删除中间引用 / 新增引用 → 编号自动重排
 python author_year_test.py   # 场景：作者-年份制 → 字母序 + 幂等
+python edge_test.py          # 边界：中文 key / 小写占位符 / 无年份 / 正文段保护
+python multi_doc_test.py     # 场景：分章多文档 → 全文统一编号 + 跨文档跳转
 python verify_docx.py 文稿.docx   # 结构完整性（超链接 ↔ 书签一一对应）
 ```
 
@@ -185,9 +198,10 @@ python verify_docx.py 文稿.docx   # 结构完整性（超链接 ↔ 书签一�
 
 ## ⚠️ 注意事项
 
-- **文档被 Word 占用**：运行脚本前先关闭打开的 Word 文档；
+- **文档被 Word 占用**：运行脚本前先关闭打开的 Word 文档（脚本会检测并提示）；
+- **仅支持 .docx**：.doc 请先在 Word 中另存为 .docx；
 - **`[?]` 多于未引用条目**：脚本会报错，先用 `add_refs.py` 补文献；
-- **同一篇引多次**：第二次放 `[CITE:同一个key]`，编号自动复用；
+- **同一篇引多次**：第二次放 `[CITE:同一个key]`，编号自动复用；同一处引多篇放 `[CITE:k1][CITE:k2]`；
 - **专著 / 学位论文 / 会议**：记得在 refs.csv 填 `city`（出版地/保存地），`web` 类型必须填 `url`；
 - **正文标注位置**：编号用上标、紧跟引文内容、放在句末标点之前（`……显著进展[1]。`），前后无空格；
 - **行距**：国标不强制，随学校/期刊模板，可在 Word 中全选参考文献段统一设置。

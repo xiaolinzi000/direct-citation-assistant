@@ -190,7 +190,9 @@ def _type_tag(t):
 def gbt7714(r):
     """GB/T 7714-2015 顺序编码制。
     支持 city（出版地/保存地）：专著[M]/学位论文[D]/会议[C] 输出 出版地: 出版者；
-    电子资源[EB/OL] 输出 (发布日期)[引用日期]. URL（引用日期自动取当天）。"""
+    电子资源[EB/OL] 输出 (发布日期)[引用日期]. URL（引用日期自动取当天）。
+    斜体标记：西文期刊名/书名用 *...* 包裹（GB/T 7714 规范：西文刊名斜体、
+    中文刊名正体）；format_ref_segments 会据此拆分为斜体 run。"""
     authors = _gb_authors(r.get("authors", ""))
     title = r.get("title", "").strip()
     src = r.get("source", "").strip()
@@ -202,6 +204,8 @@ def gbt7714(r):
     city = r.get("city", "").strip()
     url = r.get("url", "").strip()
     ttype = _type_tag(r.get("type", "journal"))
+    # 西文出处名斜体（GB/T 7714：西文刊名/书名斜体；中文用正体）
+    src_it = f"*{src}*" if src and not _is_cjk(src) else src
     # 作者段与题名之间：若作者已以“等/et al.”结尾则只留一个空格
     sep = " " if authors.endswith(("等", "et al.")) else ". "
     base = f"{authors}{sep}{title}[{ttype}]"
@@ -221,7 +225,7 @@ def gbt7714(r):
     if ttype in ("M", "D", "C"):
         # 专著/学位论文/会议录：出版地: 出版者, 年（city 缺省则省略出版地）
         place = f"{city}: " if city else ""
-        base += f". {place}{src}, {year}."
+        base += f". {place}{src_it}, {year}."
         if doi:
             base += f" {doi}."
         return base
@@ -233,7 +237,7 @@ def gbt7714(r):
             vp += f"({iss})"
         if pages:
             vp += f": {pages}"
-    base += f". {src}, {year}{vp}."
+    base += f". {src_it}, {year}{vp}."
     if doi:
         base += f" {doi}."
     return base
@@ -268,7 +272,7 @@ def apa(r):
 
 
 def vancouver(r):
-    """Vancouver / ICMJE 编号式。"""
+    """Vancouver / ICMJE 编号式（西文期刊名斜体）。"""
     authors = _van_authors(r.get("authors", ""))
     title = r.get("title", "").strip()
     src = r.get("source", "").strip()
@@ -277,13 +281,14 @@ def vancouver(r):
     iss = r.get("issue", "").strip()
     pages = r.get("pages", "").strip()
     doi = r.get("doi", "").strip()
+    src_it = f"*{src}*" if src and not _is_cjk(src) else src
     seg = []
     if authors:
         seg.append(authors.rstrip(".") + ".")
     if title:
         seg.append(f"{title}.")
-    if src:
-        seg.append(f"{src}.")
+    if src_it:
+        seg.append(f"{src_it}.")
     tail = f"{year}"
     if vol:
         tail += f";{vol}"
@@ -298,7 +303,7 @@ def vancouver(r):
 
 
 def mla(r):
-    """MLA 第 9 版（期刊文章）。"""
+    """MLA 第 9 版（期刊文章，期刊名斜体）。"""
     authors = _mla_authors(r.get("authors", ""))
     title = r.get("title", "").strip()
     src = r.get("source", "").strip()
@@ -308,7 +313,8 @@ def mla(r):
     pages = r.get("pages", "").strip()
     if vol and iss:
         src += f", vol. {vol}, no. {iss}"
-    seg = [f'{authors.rstrip(".")}. "{title}." {src}.']
+    src_it = f"*{src}*" if src and not _is_cjk(src) else src
+    seg = [f'{authors.rstrip(".")}. "{title}." {src_it}.']
     if pages:
         seg.append(f"pp. {pages}.")
     seg.append(f"{year}.")
@@ -323,6 +329,19 @@ FORMATS = {"gbt7714": gbt7714, "apa": apa, "vancouver": vancouver, "mla": mla}
 def format_ref(r, style="gbt7714"):
     fn = FORMATS.get(style.lower(), gbt7714)
     return fn(r)
+
+
+def format_ref_segments(r, style="gbt7714"):
+    """把 format_ref 的纯文本（含 *...* 斜体标记）拆分为
+    [(text, italic:bool), ...]，供 insert_refs 生成带斜体的 Word run。
+    星号只作标记，不进入输出文本。"""
+    text = format_ref(r, style)
+    segs = []
+    for i, chunk in enumerate(re.split(r"\*([^*]*)\*", text)):
+        if chunk == "":
+            continue
+        segs.append((chunk, i % 2 == 1))
+    return segs
 
 
 if __name__ == "__main__":

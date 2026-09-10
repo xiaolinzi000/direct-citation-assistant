@@ -22,10 +22,13 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 | 🔍 Sentence-level judgment | A concrete checklist for deciding whether each sentence needs a citation, avoiding citation padding |
 | 🎯 Three search principles | Strongest evidence first → newest first → highest citation count; covers both Chinese & English literature |
 | 🔗 Hyperlink citations | In-text numbers (superscript by default) are **clickable and jump** to the matching entry in the reference list |
+| 📚 Multi-doc chapters | Process several `.docx` chapters at once with one continuous numbering; citations **jump across documents** to the main document's reference list (verified in Word) |
 | 🔢 Auto renumbering | Re-run after deleting / adding a citation — numbers update automatically, no manual fixing |
 | 📑 Four formats | GB/T 7714 (default), APA, Vancouver, MLA; numbered + author-year styles |
+| ✒️ Italic by spec | Western journal/book names automatically italic per GB/T 7714; Chinese journal names stay upright (`--no-italic-source` to disable) |
 | 🌐 Site checks | Built-in list of 18 literature-search sites, availability checked by code, with scheduled updates |
 | 📝 Complete GB format | Journal, conference, **book [M], thesis [D], web page [EB/OL]** all rendered per GB/T 7714 |
+| 🀄 Chinese friendly | Chinese keys in placeholders (`[CITE:注意力机制]`), case-insensitive; Chinese references & journal names handled automatically |
 | ✒️ Auto typography | Chinese: SimSun (宋体) + Western/digits: Times New Roman; hanging indent 2 chars, justified, tab-aligned numbers |
 | 📄 PDF archiving | Downloaded papers renamed by title and archived; name collisions get numbered suffixes, never overwritten |
 | 💾 Auto backup | Every docx / refs.csv modification is backed up first (last 30 kept) |
@@ -80,17 +83,25 @@ python scripts/add_refs.py --refs <project>/引用目录/refs.csv ^
 
 ### 3. Place placeholders in your text and insert citations
 
-Put `[?]` (auto-picks the next unused entry) or `[CITE:key]` (cite a specific entry) at the end of the sentence:
+Put `[?]` (auto-picks the next unused entry) or `[CITE:key]` (cite a specific entry, case-insensitive, Chinese keys supported) at the end of the sentence:
 
 ```bash
 python scripts/insert_refs.py --docx <project>/论文/文稿.docx ^
     --refs <project>/引用目录/refs.csv --style gbt7714 --citation numbered
 ```
 
+**Multi-chapter theses**: pass all chapters at once — one continuous numbering across the whole text, the reference list is generated at the end of the last chapter, and citations jump across documents:
+
+```bash
+python scripts/insert_refs.py --docx <project>/论文/第1章.docx <project>/论文/第2章.docx ^
+    --refs <project>/引用目录/refs.csv
+```
+
 Result:
 
 - In-text markers become clickable superscripts `[1]` (Ctrl+click jumps to the entry in the reference list);
 - A 「参考文献」 heading and list are generated (or reused) at the end of the document;
+- Western journal/book names are automatically italic per GB/T 7714;
 - Delete a citation anywhere and re-run — the rest renumber automatically.
 
 ---
@@ -132,11 +143,11 @@ Detailed step-by-step instructions live in [SKILL.md](SKILL.md) (the skill maste
 | `new_project.py` | Create project workspace (3 sub-folders outside drive C: + refs.csv template) |
 | `add_refs.py` | Write citations into refs.csv (flags / interactive, validates type, auto-backup) |
 | `rename_papers.py` | Match & rename downloaded PDFs by title, archive them (collision-safe) |
-| `insert_refs.py` | **Core**: placeholders → hyperlink citations; reference list create/update; auto-renumbering |
+| `insert_refs.py` | **Core**: placeholders → hyperlink citations; reference list create/update; auto-renumbering; multi-doc chapter numbering with cross-document jumps; Western journal names italic by default |
 | `format_refs.py` | Render a single entry as gbt7714 / apa / vancouver / mla |
 | `refs_db.py` | refs.csv read/write library (full GB format incl. `city` field) |
 | `check_websites.py` | Availability check of the 18 literature-search sites (deterministic; `--update` rewrites the list) |
-| `demo/*` | Demo assets & automated tests (`make_demo.py`, `renumber_test.py`, `author_year_test.py`, `verify_docx.py`) |
+| `demo/*` | Demo assets & automated tests (`make_demo.py`, `renumber_test.py`, `author_year_test.py`, `edge_test.py`, `multi_doc_test.py`, `verify_docx.py`) |
 
 ### Search-site list & scheduled checks
 
@@ -178,6 +189,8 @@ cd scripts/demo
 python make_demo.py          # generate demo assets (refs.csv + 文稿.docx)
 python renumber_test.py      # scenario: delete / add citations → auto renumbering
 python author_year_test.py   # scenario: author-year → alphabetical order + idempotency
+python edge_test.py          # edge cases: Chinese keys / lowercase placeholders / no year / body-paragraph protection
+python multi_doc_test.py     # scenario: multi-chapter docs → continuous numbering + cross-doc jumps
 python verify_docx.py 文稿.docx   # structural integrity (hyperlink ↔ bookmark 1:1)
 ```
 
@@ -185,9 +198,10 @@ python verify_docx.py 文稿.docx   # structural integrity (hyperlink ↔ bookma
 
 ## ⚠️ Notes
 
-- **Word locks the file**: close the document in Word before running the scripts;
+- **Word locks the file**: close the document in Word before running the scripts (the script detects this and tells you);
+- **`.docx` only**: convert `.doc` to `.docx` in Word first;
 - **`[?]` more than unused entries**: the script errors out — add more references with `add_refs.py` first;
-- **Citing the same paper twice**: use `[CITE:same-key]` the second time; the number is reused;
+- **Citing the same paper twice**: use `[CITE:same-key]` the second time; the number is reused; multiple citations at one spot: `[CITE:k1][CITE:k2]`;
 - **Book / thesis / conference**: fill `city` (place of publication / preservation) in refs.csv; `web` entries must fill `url`;
 - **In-text position**: number as superscript, directly after the cited content, **before** the sentence-final punctuation (`…significant progress[1].`), no spaces around it;
 - **Line spacing**: not mandated by the national standard; follow your school / journal template, select the whole reference list and set it in Word.
