@@ -57,7 +57,10 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 
 ## 🆕 What's New
 
-**v1.6.0 (latest)**
+**v1.6.1 (latest)**
+- 📖 Docs: "add/remove citations" maintenance — auto-renumber after deletion, **3-step insertion for an advisor-specified paper** (`[CITE:key]`), and the risks of manual editing (final-only)
+
+**v1.6.0**
 - 🔎 **Metadata cross-check upgraded**: on exact DOI hit, besides the title, **year / volume / issue / pages** are now compared against the authoritative record — any mismatch flags ⚠️ (catches "real paper but wrong vol/issue/pages")
 - 🈴 **Chinese-literature coverage note**: OpenAlex covers Chinese titles sparsely; a real Chinese paper may be flagged ❌ — confirm it on CNKI/Wanfang manually; fixed the OpenAlex edition-year false positive (2017 paper matched a 2025 reprint)
 
@@ -80,7 +83,7 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 - 🛡️ Fixed: body paragraphs after the reference heading are no longer deleted; clear hint when the document is open in Word; `.docx` only
 - 🧪 New `edge_test.py` boundary regression
 
-> Full version history (v1.0.0 → v1.6.0) in [CHANGELOG.md](CHANGELOG.md).
+> Full version history (v1.0.0 → v1.6.1) in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
