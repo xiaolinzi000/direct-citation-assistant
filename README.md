@@ -57,7 +57,10 @@
 
 ## 🆕 更新记录
 
-**v1.6.1（最新）**
+**v1.7.0（最新）**
+- 🤖 **防"AI 改论文丢超链接"**：新增 `insert_refs.py --to-placeholders`——修改前把引用超链接转回 `[CITE:key]` 普通文本占位符并移除文末表，交给 AI/他人任意改正文（占位符是纯文本不会被破坏），改完重跑即恢复超链接、编号、文末表（已实测闭环：python-docx 改写正文 → 重跑 → 3 处引用完整恢复）
+
+**v1.6.1**
 - 📖 技能文档补充「增删引用维护」：删除引用自动重排、**老师指定文献三步插入法**（`[CITE:key]`）、手动编辑引用的风险与定稿场景用法
 
 **v1.6.0**
@@ -83,7 +86,7 @@
 - 🛡️ 修复参考文献标题后正文段被误删；文档被 Word 占用时给出提示；仅支持 `.docx`
 - 🧪 新增 `edge_test.py` 边界回归测试
 
-> 完整版本线（v1.0.0 → v1.6.1）见 [CHANGELOG.md](CHANGELOG.md)。
+> 完整版本线（v1.0.0 → v1.7.0）见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -197,7 +200,7 @@ python scripts/insert_refs.py --docx <项目>/论文/第1章.docx <项目>/论�
 | `new_project.py` | 创建项目工作区（C 盘外三子目录 + refs.csv 模板） |
 | `add_refs.py` | 把题录写入 refs.csv（参数 / 交互模式，校验 type，自动备份） |
 | `rename_papers.py` | 下载的 PDF 按题名匹配重命名归档（重名自动加序号） |
-| `insert_refs.py` | **核心**：占位符 → 超链接引用；文末目录生成/更新；自动重编号；支持多文档分章统一编号与跨文档跳转；默认西文期刊名斜体；`--mapping` 输出正文引用↔文献对照表 |
+| `insert_refs.py` | **核心**：占位符 → 超链接引用；文末目录生成/更新；自动重编号；支持多文档分章统一编号与跨文档跳转；默认西文期刊名斜体；`--mapping` 输出正文引用↔文献对照表；`--to-placeholders` 生成纯文本草稿（交给 AI 修改不丢引用） |
 | `verify_refs.py` | **引用真实性校验**：Crossref DOI / OpenAlex 题名联网核实，判定 ✅ 已核实 / ⚠️ 有出入 / ❌ 未找到 / 🔶 无法联网；`--offline` 仅字段检查；`--report` 导出核对报告 |
 | `format_refs.py` | 单条题录按 gbt7714 / apa / vancouver / mla 渲染 |
 | `refs_db.py` | refs.csv 读写工具库（含 city 字段的国标完整格式） |

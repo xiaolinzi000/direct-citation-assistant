@@ -44,6 +44,7 @@ insert_refs.py — 在 Word 文档中插入/更新带超链接的论文引用（
 """
 
 import argparse
+import copy
 import io
 import os
 import re
@@ -738,6 +739,78 @@ def add_cross_doc_links(items, doc_root, main_path, this_path):
     return count
 
 
+# ---------- 转占位符模式（交给 AI 修改前的保护） ----------
+
+def _norm_heading_text(s):
+    """标题归一化（与 find_or_create_heading 一致的去空白/标点/数字后缀）。"""
+    s = re.sub(r"[\s:：.。·\-–—]+", "", (s or "").strip().casefold())
+    return re.sub(r"\d+$", "", s)
+
+
+def to_placeholders_mode(docx_list, backup_dir=None):
+    """把正文引用超链接还原为 [CITE:key] 占位符纯文本，并删除文末参考文献表。
+
+    用途：把生成好的文档交给 AI / 他人自由修改正文之前先跑一次。
+    占位符 [CITE:key] 是普通文本，任何文字处理（AI 重写、python-docx
+    重存、复制粘贴等）都不会破坏引用标记；对方改完后重新运行
+    insert_refs.py（正常参数）即可恢复超链接、编号与文末表——彻底避免
+    "AI 改完超链接就没了"的问题。
+
+    返回转换的引用超链接数量。"""
+    total = 0
+    for d in docx_list:
+        items, doc_root, _ = load_docx(d)
+        body = doc_root.find(w("body"))
+        # 1) 引用超链接 -> [CITE:key] 文本 run（保留原 run 的 rPr 格式）
+        for h in list(body.iter(w("hyperlink"))):
+            if not is_ref_hyperlink(h):
+                continue
+            key = (h.get(w("anchor")) or "")[4:]
+            parent = h.getparent()
+            rpr = None
+            for r in h.findall(w("r")):
+                rp = r.find(w("rPr"))
+                if rp is not None:
+                    rpr = rp
+                    break
+            new_r = etree.SubElement(parent, w("r"))
+            if rpr is not None:
+                new_r.append(copy.deepcopy(rpr))
+            t = etree.SubElement(new_r, w("t"))
+            t.text = f"[CITE:{key}]"
+            parent.replace(h, new_r)
+            total += 1
+        # 2) 删除文末参考文献表（标题段之后的条目段：带 ref_ 书签的段
+        #     + 紧跟其后的 [n] 开头段；遇到其他非空段即停止）
+        target_heads = {_norm_heading_text(t) for t in TARGET_HEADINGS}
+        after = False
+        prev_entry = False
+        removed = 0
+        for child in list(body):
+            if after:
+                if child.tag == w("p"):
+                    has_ref_bookmark = any(
+                        (bs.get(w("name")) or "").startswith("ref_")
+                        for bs in child.iter(w("bookmarkStart")))
+                    txt = para_text(child).strip()
+                    if has_ref_bookmark or (ENTRY_START_RE.match(txt) and prev_entry):
+                        body.remove(child)
+                        removed += 1
+                        prev_entry = True
+                    elif txt:
+                        break
+                    else:
+                        prev_entry = False
+            elif child.tag == w("p") and _norm_heading_text(para_text(child)) in target_heads:
+                after = True
+                prev_entry = False
+        # 3) 备份并保存
+        bpath = backup_docx(d, backup_dir)
+        save_docx(d, items, doc_root)
+        print(f"已转换：{d}（文末条目移除 {removed} 条；原文件备份：{bpath}）")
+    return total
+
+
 # ---------- 主流程 ----------
 
 def main():
@@ -776,6 +849,11 @@ def main():
                     help="关闭出处（西文期刊名/书名）斜体（默认按 GB/T 7714 规范斜体）")
     ap.add_argument("--mapping", action="store_true",
                     help="输出「正文引用 ↔ 文献」对照表（逐处核对引用是否真实支撑该句）")
+    ap.add_argument("--to-placeholders", action="store_true",
+                    help="把正文引用超链接转为 [CITE:key] 占位符纯文本并移除文末参考文献表："
+                         "生成纯文本草稿交给 AI/他人修改正文，占位符是普通文本不会被破坏；"
+                         "对方改完后重跑本脚本（正常参数）即恢复超链接、编号与文末表。"
+                         "此模式不需要 --refs。")
     args = ap.parse_args()
 
     docx_list = [os.path.abspath(d) for d in args.docx]
@@ -787,6 +865,13 @@ def main():
             print(f"只支持 .docx 文档（当前：{d}）。")
             print("若为 .doc 格式，请先在 Word 中「另存为」.docx 后再运行。")
             sys.exit(1)
+    # --to-placeholders：不需要 refs.csv，直接转占位符
+    if args.to_placeholders:
+        n = to_placeholders_mode(docx_list, args.backup_dir)
+        print(f"\n已把 {n} 处引用超链接转为 [CITE:key] 占位符纯文本，文末参考文献表已移除。")
+        print("现在可把这份文档交给 AI/他人自由修改正文（占位符是普通文本，不会被破坏）；")
+        print("改完后重新运行本脚本（正常参数，需带 --refs）即恢复超链接、编号和文末表。")
+        return
     if args.main:
         main_abs = os.path.abspath(args.main)
         if main_abs not in docx_list:
