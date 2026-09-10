@@ -624,6 +624,8 @@ def main():
                     help="悬挂缩进量 pt（2 字符×正文字号：五号 21 / 小四 24 / 四号 28，默认 21）")
     ap.add_argument("--no-italic-source", action="store_true",
                     help="关闭出处（西文期刊名/书名）斜体（默认按 GB/T 7714 规范斜体）")
+    ap.add_argument("--mapping", action="store_true",
+                    help="输出「正文引用 ↔ 文献」对照表（逐处核对引用是否真实支撑该句）")
     args = ap.parse_args()
 
     docx_list = [os.path.abspath(d) for d in args.docx]
@@ -729,6 +731,25 @@ def main():
         print("编号方案：", ", ".join(f"{k}->{n}" for k, n in key_to_num.items()))
     else:
         print("引用样式：作者-年份制（--citation author-year）")
+
+    # 5b. 引用对应性对照表（核对每处引用是否真实支撑所在句子）
+    if args.mapping:
+        print("\n== 正文引用 ↔ 文献对照表（逐处核对引用是否对得上） ==")
+        for pt in points:
+            key = pt["key"]
+            ref = refs_by_key.get(key, {})
+            num = pt.get("num")
+            para = para_text(pt["paragraph"]).strip()
+            if len(para) > 90:
+                para = para[:90] + "…"
+            tag = f"[{num}]" if num else "—"
+            print(f"{tag} 段落：「{para}」")
+            print(f"    ↳ key={key} → {(ref.get('title') or '')[:60]}"
+                  f"（{(ref.get('year') or '')}）")
+            note = (ref.get("note") or "").strip()
+            if note:
+                print(f"       note：{note[:100]}")
+        print()
 
     if args.dry_run:
         print("--dry-run：未写文件。")

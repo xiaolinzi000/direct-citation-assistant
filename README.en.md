@@ -26,6 +26,8 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 | 🔢 Auto renumbering | Re-run after deleting / adding a citation — numbers update automatically, no manual fixing |
 | 📑 Four formats | GB/T 7714 (default), APA, Vancouver, MLA; numbered + author-year styles |
 | ✒️ Italic by spec | Western journal/book names automatically italic per GB/T 7714; Chinese journal names stay upright (`--no-italic-source` to disable) |
+| 🔎 Citation authenticity | **No fabricated references**: `verify_refs.py` checks each entry online via Crossref DOI / OpenAlex title — ✅ verified / ⚠️ mismatch / ❌ not found / 🔶 offline — plus field completeness & the `note` support sentence |
+| 🔗 Citation mapping | `insert_refs.py --mapping` prints a "in-text ↔ reference" table (number, sentence, `note`) to verify every citation actually backs its sentence |
 | 🌐 Site checks | Built-in list of 18 literature-search sites, availability checked by code, with scheduled updates |
 | 📝 Complete GB format | Journal, conference, **book [M], thesis [D], web page [EB/OL]** all rendered per GB/T 7714 |
 | 🀄 Chinese friendly | Chinese keys in placeholders (`[CITE:注意力机制]`), case-insensitive; Chinese references & journal names handled automatically |
@@ -45,7 +47,11 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 
 ## 🆕 What's New
 
-**v1.3.0 (latest)**
+**v1.4.0 (latest)**
+- 🔎 **Citation authenticity check** (new `verify_refs.py`): every reference verified online against Crossref DOI / OpenAlex title — ✅ verified / ⚠️ mismatch / ❌ not found (likely fabricated — fix or remove before writing into your paper) / 🔶 offline; `--offline` field-only, `--report` exports a check report — **no fake references make it into your paper**
+- 🔗 **Citation mapping** (`insert_refs.py --mapping`): prints an "in-text ↔ reference" table (number, sentence, `note` support sentence) to confirm each citation backs its sentence; the `note` field in refs.csv is now required
+
+**v1.3.0**
 - 📚 **Multi-chapter documents**: process several `.docx` at once with one continuous numbering; citations **jump across documents** to the main document's reference list (`--main` picks the main doc; verified in Word)
 - ✒️ **Italic by spec**: Western journal/book names automatically italic per GB/T 7714, Chinese journal names upright (`--no-italic-source` to disable)
 
@@ -54,7 +60,7 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 - 🛡️ Fixed: body paragraphs after the reference heading are no longer deleted; clear hint when the document is open in Word; `.docx` only
 - 🧪 New `edge_test.py` boundary regression
 
-> Full version history (v1.0.0 → v1.3.0) in [CHANGELOG.md](CHANGELOG.md).
+> Full version history (v1.0.0 → v1.4.0) in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -96,7 +102,15 @@ python scripts/add_refs.py --refs <project>/引用目录/refs.csv ^
     --year 2017 --volume 30 --doi 10.5555/3295222.3295349 --type journal
 ```
 
-### 3. Place placeholders in your text and insert citations
+### 3. Verify authenticity & field completeness (no fabricated refs)
+
+```bash
+python scripts/verify_refs.py --refs <project>/引用目录/refs.csv
+```
+
+Each entry is checked online against authoritative databases (Crossref by DOI, OpenAlex by title): `✅ verified` / `⚠️ mismatch` / `❌ not found` (likely fabricated — remove or fix before writing into your paper) / `🔶 offline`; missing title/authors/year and an empty `note` (the sentence this paper backs) are flagged. `--offline` skips the network, `--report report.md` exports a check report.
+
+### 4. Place placeholders in your text and insert citations
 
 Put `[?]` (auto-picks the next unused entry) or `[CITE:key]` (cite a specific entry, case-insensitive, Chinese keys supported) at the end of the sentence:
 
@@ -111,6 +125,9 @@ python scripts/insert_refs.py --docx <project>/论文/文稿.docx ^
 python scripts/insert_refs.py --docx <project>/论文/第1章.docx <project>/论文/第2章.docx ^
     --refs <project>/引用目录/refs.csv
 ```
+
+**Mapping check**: add `--mapping` to print the "in-text ↔ reference" table (each number → paper, its sentence, `note`) and verify every citation actually backs its sentence:
+
 
 Result:
 
@@ -158,7 +175,8 @@ Detailed step-by-step instructions live in [SKILL.md](SKILL.md) (the skill maste
 | `new_project.py` | Create project workspace (3 sub-folders outside drive C: + refs.csv template) |
 | `add_refs.py` | Write citations into refs.csv (flags / interactive, validates type, auto-backup) |
 | `rename_papers.py` | Match & rename downloaded PDFs by title, archive them (collision-safe) |
-| `insert_refs.py` | **Core**: placeholders → hyperlink citations; reference list create/update; auto-renumbering; multi-doc chapter numbering with cross-document jumps; Western journal names italic by default |
+| `insert_refs.py` | **Core**: placeholders → hyperlink citations; reference list create/update; auto-renumbering; multi-doc chapter numbering with cross-document jumps; Western journal names italic by default; `--mapping` prints the in-text ↔ reference table |
+| `verify_refs.py` | **Citation authenticity check**: Crossref DOI / OpenAlex title lookup — ✅ verified / ⚠️ mismatch / ❌ not found / 🔶 offline; `--offline` field-only; `--report` exports a check report |
 | `format_refs.py` | Render a single entry as gbt7714 / apa / vancouver / mla |
 | `refs_db.py` | refs.csv read/write library (full GB format incl. `city` field) |
 | `check_websites.py` | Availability check of the 18 literature-search sites (deterministic; `--update` rewrites the list) |
@@ -207,8 +225,11 @@ python renumber_test.py      # scenario: delete / add citations → auto renumbe
 python author_year_test.py   # scenario: author-year → alphabetical order + idempotency
 python edge_test.py          # edge cases: Chinese keys / lowercase placeholders / no year / body-paragraph protection
 python multi_doc_test.py     # scenario: multi-chapter docs → continuous numbering + cross-doc jumps
+python verify_refs_test.py   # offline regression: field completeness / --offline / similarity
 python verify_docx.py 文稿.docx   # structural integrity (hyperlink ↔ bookmark 1:1)
 ```
+
+> The online authenticity check (Crossref/OpenAlex) needs the network — spot-check it manually: `python ../verify_refs.py --refs refs.csv` — real papers (vaswani2017/devlin2019) should be ✅, the fabricated demo entry (zhang2023) should be ❌ not found.
 
 ---
 
