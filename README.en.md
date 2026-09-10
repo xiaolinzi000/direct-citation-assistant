@@ -43,6 +43,21 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 
 ---
 
+## 🆕 What's New
+
+**v1.3.0 (latest)**
+- 📚 **Multi-chapter documents**: process several `.docx` at once with one continuous numbering; citations **jump across documents** to the main document's reference list (`--main` picks the main doc; verified in Word)
+- ✒️ **Italic by spec**: Western journal/book names automatically italic per GB/T 7714, Chinese journal names upright (`--no-italic-source` to disable)
+
+**v1.2.0**
+- 🀄 Chinese keys in placeholders, case-insensitive (`[CITE:注意力机制]` / `[cite:key]`)
+- 🛡️ Fixed: body paragraphs after the reference heading are no longer deleted; clear hint when the document is open in Word; `.docx` only
+- 🧪 New `edge_test.py` boundary regression
+
+> Full version history (v1.0.0 → v1.3.0) in [CHANGELOG.md](CHANGELOG.md).
+
+---
+
 ## 🚀 Quick Start
 
 ### Requirements
