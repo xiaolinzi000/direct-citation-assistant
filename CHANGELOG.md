@@ -17,6 +17,7 @@
 - `insert_refs.py` 新增 `verify_docx_links()`：逐个确认 ①正文引用超链接（anchor=ref_key）在文末都有对应书签（无悬空链接）②文末每个书签都被正文引用（无孤立条目）③编号制下正文编号集合与文末条目编号集合一致（无孤立编号/悬空编号）④编号↔条目一致（key_to_num 核对，防张冠李戴）⑤无重复书签
 - 第 9 步回读验证升级：编号不一致/书签重复/链接不完整全部进 fail 列表，**未通过默认 `sys.exit(1)`**（--warn-only 仅警告）
 - 新增 `scripts/verify_links.py`：独立验收入口——**AI/他人改完文档后必跑**（`python verify_links.py --docx 文稿.docx`，多文档 `--main` 指定主文档），未通过退出码 1
+- `merge_refs.py` 同步硬化：合并稿回读验证（占位符残留/编号不一致）未通过默认退出码 1（`--warn-only` 降级），`--style` 支持 ieee
 
 **3. DOI 保留与检查（精确解析，不静默删、不猜填）**
 - `format_refs.py` 新增 `DOI_RE` + `normalize_doi()`：兼容裸 DOI / `doi:` / `https://doi.org/` / `dx.doi.org` / `DOIs:` 等录入形态，自动剥离尾随标点；提取不到返回 None（视为无可信 DOI）

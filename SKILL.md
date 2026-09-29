@@ -284,7 +284,7 @@ python "<SKILL目录>/scripts/insert_refs.py" --docx <项目>/论文/文稿.docx
   python "<SKILL目录>/scripts/merge_refs.py" --chapters 第1章.docx 第2章.docx ^
       --refs <项目>/引用目录/refs.csv --out <项目>/论文/合并稿.docx
   ```
-  自动移除各章文末表、合并正文、去掉跨文档跳转（改为文内跳转）、输出「章节旧编号→全局新编号」映射表；合并前自动备份，写后回读验证。
+  自动移除各章文末表、合并正文、去掉跨文档跳转（改为文内跳转）、输出「章节旧编号→全局新编号」映射表；合并前自动备份，写后回读验证。**v1.9**：合并稿回读验证（占位符残留 / 编号不一致）未通过默认退出码 1（`--warn-only` 降级为警告）；`--style` 支持 `ieee`。
 - **下载论文**：部分期刊 PDF 需登录/订阅，浏览器手动下载后运行 rename_papers.py 即可。
 
 ## 脚本参考
@@ -297,7 +297,7 @@ python "<SKILL目录>/scripts/insert_refs.py" --docx <项目>/论文/文稿.docx
 - `fetch_doi.py` —— **自动补查缺失 DOI**：回退链 Crossref → PubMed E-utilities → OpenAlex → 出版页抓取（`--scrape URL`），仅题名+年份+首作者全吻合才建议；`--apply` 写回前自动备份 refs.csv；`--report` 导出补查报告。
 - `verify_support.py` —— **内容级核验（防张冠李戴）**：从 docx 提取引用句 → 拉文献摘要 → token 覆盖率判定 ✅强支持 / ⚠️弱支持 / 🔶无摘要 / 🌐跨语言；`--min-coverage` 调阈值；`--report` 导出"弱支持引用"人工复核清单；**v1.9 `--evidence-csv`：把逐句核验记录写回 refs.csv 的 evidence 列（论断|出处|核验深度|支持程度，无法确认标「待核实」），写入前自动备份**。
 - `verify_links.py` —— **链接完整性独立验收（v1.9）**：对已有 docx 逐个确认正文引用超链接↔文末条目书签一一对应、无孤立编号/悬空链接/孤立条目、无重复书签；未通过退出码 1（`--warn-only` 只警告）。**AI/他人改完文档后必跑**；insert_refs 每次运行后也自动做同款检查。
-- `merge_refs.py` —— **多章节合并**：移除各章文末表、合并正文、去掉跨文档跳转、书签 ID 全局重排、全局重编号、输出「旧编号→新编号」映射表；备份 + 回读。
+- `merge_refs.py` —— **多章节合并**：移除各章文末表、合并正文、去掉跨文档跳转、书签 ID 全局重排、全局重编号、输出「旧编号→新编号」映射表；备份 + 回读。**v1.9：回读验证（占位符残留/编号不一致）未通过默认退出码 1（--warn-only 降级）；--style 支持 ieee。**
 - `format_refs.py` —— 单条记录的格式渲染（gbt7714/apa/vancouver/mla/harvard/**ieee**），供 insert_refs 内部调用；**v1.9 新增 `normalize_doi()` 精确解析与完整 IEEE 渲染器**（期刊官方缩写表、月份缩写、作者≤6 + et al.）。
 - `api_client.py` —— 公共 API 客户端：统一 UA；429/5xx 指数退避重试；响应落盘缓存 `scripts/_api_cache/`（默认 7 天 TTL）。
 - `refs_db.py` —— refs.csv 读写工具库（**v1.9 表头 14 列含 evidence；旧表头读取时显式告警**）。

@@ -17,9 +17,9 @@ merge_refs.py — 多章节论文合并：统一全局编号 + 合并文末参�
   python merge_refs.py --docx 第1章.docx 第2章.docx 第3章.docx ^
       --refs <项目>/引用目录/refs.csv --out 合并稿.docx
 
-常用参数：--style gbt7714|apa|vancouver|mla|harvard、--citation numbered|author-year、
+常用参数：--style gbt7714|apa|vancouver|mla|harvard|ieee、--citation numbered|author-year、
   --entry-num num|bracket、--heading 标题、--no-superscript、--mapping、
-  --dry-run、--backup-dir 路径。
+  --dry-run、--backup-dir 路径、--warn-only（v1.9：回读验证未通过默认退出码 1）。
 
 注意：各章文档请用 insert_refs.py 生成引用后再合并（脚本识别引用超链接与
 [CITE:key] 占位符）；纯文本手打编号 [1] 无法识别，需先转占位符。
@@ -136,7 +136,8 @@ def main():
                     help="输出合并稿路径（默认 <第一章目录>/合并稿.docx）")
     ap.add_argument("--refs", default="", help="refs.csv 路径（默认 docx 同目录）")
     ap.add_argument("--style", default="gbt7714",
-                    choices=["gbt7714", "apa", "vancouver", "mla", "harvard"])
+                    choices=["gbt7714", "apa", "vancouver", "mla", "harvard",
+                             "ieee"])
     ap.add_argument("--citation", default="numbered",
                     choices=["numbered", "author-year"])
     ap.add_argument("--heading", default="", help="参考文献标题文本")
@@ -153,6 +154,8 @@ def main():
     ap.add_argument("--backup-dir", default="")
     ap.add_argument("--mapping", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--warn-only", action="store_true",
+                    help="v1.9：回读验证（占位符残留/编号不一致）未通过时仅警告，不退出非零（默认未通过退出码 1）")
     args = ap.parse_args()
 
     docx_list = [os.path.abspath(d) for d in args.docx]
@@ -283,13 +286,25 @@ def main():
             if m:
                 all_nums.append(int(m.group()))
     print(f"回读验证：正文引用 {len(hyps)} 个｜残留占位符 {len(leftovers)} 个")
+    fails = []
     if leftovers:
-        print("警告：仍有占位符残留：", leftovers)
+        print(f"未通过：仍有占位符残留：{leftovers}")
+        fails.append("占位符残留")
     if args.citation == "numbered":
         if set(all_nums) != set(range(1, entry_count + 1)):
-            print(f"警告：编号不一致！正文 {sorted(all_nums)} vs 条目 {entry_count}")
+            print(f"未通过：编号不一致！正文 {sorted(all_nums)} vs 条目 {entry_count}")
+            fails.append("编号不一致")
         else:
             print("编号一致性验证通过。")
+    if fails:
+        print(f"回读验证未通过：{('、'.join(fails))}。")
+        if args.warn_only:
+            print("--warn-only：以上仅警告，不退出非零。")
+        else:
+            print("未通过检查 = 报告失败：默认退出码 1（--warn-only 可降级为警告）。")
+            sys.exit(1)
+    else:
+        print("回读验证通过：合并稿正文引用 ↔ 文末条目逐条对应。")
 
 
 if __name__ == "__main__":
