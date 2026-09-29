@@ -22,6 +22,10 @@ verify_refs.py 只核「书目信息真实、与权威库一致」；本脚本�
   python verify_support.py --docx 第1章.docx 第2章.docx --refs refs.csv --report 支持核对.md
   python verify_support.py --docx 文稿.docx --refs refs.csv --min-coverage 0.3
                           # 自定义弱支持阈值（默认 0.25）
+  python verify_support.py --docx 文稿.docx --refs refs.csv --evidence-csv
+                          # v1.9：把逐句核验记录写回 refs.csv 的 evidence 列
+                          # （论断|出处|核验深度|支持程度；无法确认标「待核实」，
+                          #  不自动挪引文）；写入前自动备份 refs.csv
 
 注意：
   - 覆盖率是启发式指标：摘要用词与正文用词不同时可能误报「弱」，
@@ -40,7 +44,7 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from api_client import fetch_json
-from refs_db import load_refs
+from refs_db import backup_refs, load_refs, save_refs
 from insert_refs import (ANY_RE, CITE_RE, is_ref_hyperlink, load_docx,
                          locate_sentence, para_text, ref_offset_in_para,
                          run_text, split_sentences)
@@ -210,6 +214,9 @@ def main():
     ap.add_argument("--min-coverage", type=float, default=0.25,
                     help="弱支持判定阈值（默认 0.25；coverage 低于该值输出 ⚠️）")
     ap.add_argument("--report", default="", help="导出核验报告到 Markdown 文件")
+    ap.add_argument("--evidence-csv", action="store_true",
+                    help="v1.9：把逐句核验记录写回 refs.csv 的 evidence 列"
+                         "（论断|出处|核验深度|支持程度；无法确认标「待核实」）")
     ap.add_argument("--refresh-cache", action="store_true",
                     help="忽略缓存强制实时拉摘要")
     args = ap.parse_args()
@@ -300,6 +307,41 @@ def main():
         with io.open(args.report, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         print(f"\n报告已导出：{args.report}")
+
+    if args.evidence_csv:
+        # v1.9：逐句证据核验记录写回 refs.csv 的 evidence 列
+        # 格式：论断|出处（段/句）|核验深度|支持程度；无法确认标「待核实」，
+        # 不自动挪引文。写入前自动备份。
+        by_key = {}
+        for doc, pidx, sidx, key, sent, status, cov, hit, src in results:
+            by_key.setdefault(key, []).append((doc, pidx, sidx, sent, status, src))
+        bpath = backup_refs(refs_path)
+        changed = 0
+        pending = 0
+        for r in refs:
+            k = r["key"]
+            if k not in by_key:
+                continue
+            parts = []
+            for doc, pidx, sidx, sent, status, src in by_key[k]:
+                depth = "摘要" if src else "无法核验（无摘要）"
+                sup = {"✅ 强支持": "强", "⚠️ 弱支持": "弱"}.get(status, "待核实")
+                if sup == "待核实":
+                    pending += 1
+                claim = sent.replace("|", "｜").strip()[:80]
+                parts.append(f"{claim}|{doc} 段{pidx} 句{sidx}|{depth}|{sup}")
+            ev = "；".join(parts)
+            if (r.get("evidence") or "").strip() != ev:
+                r["evidence"] = ev
+                changed += 1
+        if changed:
+            save_refs(refs, refs_path)
+            print(f"\n已写回 evidence 列：{changed} 条（备份于 {bpath}）。")
+        else:
+            print("\nevidence 列无需更新（与现有记录一致）。")
+        if pending:
+            print(f"⚠ 其中 {pending} 处支持程度为「待核实」：请人工打开原文核对后"
+                  "补正 evidence；不得自动挪引文。")
 
 
 if __name__ == "__main__":

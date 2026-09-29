@@ -20,7 +20,7 @@
 
 > 不依赖 Zotero，纯脚本驱动，在 Word 里完成从「逐句判断引用 → 检索筛选文献 → 插入可点击超链接引用 → 自动生成参考文献目录」的完整论文引用工作流。
 
-适用于**期刊论文、毕业论文（开题报告 / 中期报告）、课程论文**三种场景，支持**中英文文献**混合引用，参考文献格式符合 **GB/T 7714-2015**（默认），另支持 APA / Vancouver / MLA。
+适用于**期刊论文、毕业论文（开题报告 / 中期报告）、课程论文**三种场景，支持**中英文文献**混合引用，参考文献格式符合 **GB/T 7714-2015**（默认），另支持 APA / Vancouver / MLA / Harvard / **IEEE（含 TIM 等 IEEE 期刊）**。
 
 ---
 
@@ -34,7 +34,7 @@
 | 🔗 超链接引用 | 正文编号（默认上标）**点击即跳转**到文末对应文献条目；文末条目的 **DOI 也可点击跳转**到论文页面 |
 | 📚 分章论文支持 | 一次处理多份 `.docx` 全文统一编号，各章引用**跨文档跳转**到主文档文献表（Word 实测可用） |
 | 🔢 自动重编号 | 删除 / 新增引用后重跑脚本，编号自动连续更新，无需手工改；**`--freeze` 冻结编号**（key 恒定，如 collet2020 恒为 1），增删文献只做增量并输出新旧编号映射 diff |
-| 📑 五种格式 | GB/T 7714（默认）、APA、Vancouver、MLA、**Harvard**；编号制 + 作者-年份制（**同年同作者自动加 a/b 后缀**） |
+| 📑 六种格式 | GB/T 7714（默认）、APA、Vancouver、MLA、**Harvard**、**IEEE/TIM**（`--style ieee`：正文编号不上标、期刊官方缩写、vol./no./pp.、月份缩写、`doi:` 前缀）；编号制 + 作者-年份制（**同年同作者自动加 a/b 后缀**） |
 | ✒️ 规范斜体 | 西文期刊名/书名按 GB/T 7714 自动斜体、中文刊名正体（`--no-italic-source` 关闭） |
 | 🔎 引用真实性校验 | **防止编造引用**：`verify_refs.py` 联网查 Crossref DOI / OpenAlex 题名，判定 ✅ 已核实 / ⚠️ 有出入 / ❌ 未找到，并检查字段完整性与 note 支撑说明 |
 | 🔗 引用对应性核对 | `insert_refs.py --mapping` 输出「正文引用 ↔ 文献」对照表（编号、所在句子、note 支撑说明），逐处核对对得上 |
@@ -42,7 +42,10 @@
 | 📄 变更审计 | `--audit` 输出编号映射 diff / 引用点清单 / 堆叠告警 / 文末条目 / 备份回滚清单 |
 | 🧭 TOC 安全定位 | 文末目录定位取**最后一个** References 标题并**自动跳过目录（TOC）区域**，不会误插进目录 |
 | 🔄 API 回退链 | 联网核验统一走 `api_client`（429/5xx 指数退避 + 7 天落盘缓存）；`fetch_doi.py` 按 Crossref → PubMed → OpenAlex → 出版页自动补查缺失 DOI |
-| 📖 内容级核验 | `verify_support.py` 把引用句与文献摘要做 token 覆盖率比对，输出「弱支持引用」清单（防张冠李戴），跨语言引用自动标注人工核对 |
+| 📖 内容级核验 | `verify_support.py` 把引用句与文献摘要做 token 覆盖率比对，输出「弱支持引用」清单（防张冠李戴），跨语言引用自动标注人工核对；**`--evidence-csv` 把逐句核验记录写回 refs.csv（论断|出处|核验深度|支持程度，无法确认标「待核实」不自动挪引文）** |
+| 🔗 链接完整性检查（v1.9） | insert_refs 每次运行后自动逐条检查正文引用超链接↔文末条目书签一一对应（无孤立编号/悬空链接/孤立条目），**未通过退出码 1**；AI 改完文档后运行 `verify_links.py` 复查 |
+| 🎯 DOI 精确解析（v1.9） | DOI 保留并渲染可点击链接（兼容 `10.xxx`/`doi:`/`https://doi.org/`/`dx.doi.org`）；**缺 DOI / DOI 可疑明确报告（不静默删、不猜填），`--strict-doi` 直接失败** |
+| 📖 逐句证据核验（v1.9） | refs.csv 新增 `evidence` 列：论断 | 出处 | 核验深度 | 支持程度；无法确认标「待核实」，不自动挪引文；`verify_support.py --evidence-csv` 自动写回 |
 | 🧬 多章节合并 | `merge_refs.py` 把各章独立编号的文档合并为一篇，全局重编号并输出「旧编号→新编号」映射表 |
 | 🌐 网站检查 | 18 个文献检索网站内置清单，代码自动检查可用性并支持定时更新 |
 | 📝 国标格式完整 | 期刊、会议、**专著 [M]、学位论文 [D]、网页 [EB/OL]** 均按 GB/T 7714 输出 |
@@ -63,7 +66,15 @@
 
 ## 🆕 更新记录
 
-**v1.8.0（最新）**
+**v1.9.0（最新）——验收门槛硬化：未通过检查 = 报告失败**
+- 🎯 **链接完整性检查（逐条验收）**：insert_refs 回读验证升级——正文引用超链接 ↔ 文末条目书签逐一对应，**无悬空链接 / 无孤立条目 / 无孤立编号 / 编号↔条目一致**，未通过默认退出码 1（`--warn-only` 才降级）；新增独立验收脚本 `verify_links.py`，**AI/他人改完文档后必跑**
+- 🎯 **DOI 精确解析与保留**：`normalize_doi()` 兼容裸 DOI / `doi:` / `https://doi.org/` / `dx.doi.org` 等录入形态；**缺 DOI / DOI 可疑明确报告（不静默删、不猜填）**，`--strict-doi` 直接失败；`verify_refs.py` 对无法解析的 DOI 显式报错并转题名兜底
+- 📖 **逐句证据核验记录**：refs.csv 新增 `evidence` 列（14 列），`verify_support.py --evidence-csv` 把核验结论写回（论断|出处|核验深度|支持程度），**无法确认标「待核实」，不自动挪引文**
+- 📑 **IEEE/TIM 期刊格式**：`--style ieee`——正文编号不上标（IEEE 行内方括号）、期刊官方缩写（TIM→`IEEE Trans. Instrum. Meas.`）、vol./no./pp.、月份缩写、`doi:` 前缀、作者≤6 + et al.；`FORMATS` 达 6 种样式
+- 🖥️ **最终 Word 页面检查列为必做项**：文档经引用/斜体/排版修改后必须用 Word 打开做页面级验证（跳转、条目格式、DOI、缩进分页），不能只看 DOCX 内部属性或脚本报告
+- 🧪 新增 `demo/v19_test.py` 回归测试（DOI 解析 / IEEE 渲染 / 链接完整性 / 独立验收），全量回归 **12/12 全绿**
+
+**v1.8.0**
 - 🎯 **句级引用落点（最高优先级）**：引用不再堆段尾——按句切分，每个编号紧跟其支撑的那句话；句号后的编号自动归位；单句/单段堆叠编号自动告警
 - 🔒 **编号冻结 + 增量更新**：`--freeze` 后 key 编号恒定（collet2020 恒为 1），增删文献只做增量并输出「新旧编号映射 diff」，状态落盘可追溯
 - 🧭 **TOC 修复**：文末定位取最后一个 References 标题、自动跳过目录区域（不再把条目误插进 TOC）
@@ -105,7 +116,7 @@
 - 🛡️ 修复参考文献标题后正文段被误删；文档被 Word 占用时给出提示；仅支持 `.docx`
 - 🧪 新增 `edge_test.py` 边界回归测试
 
-> 完整版本线（v1.0.0 → v1.8.0）见 [CHANGELOG.md](CHANGELOG.md)。
+> 完整版本线（v1.0.0 → v1.9.0）见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -157,7 +168,9 @@ python scripts/verify_refs.py --refs <项目>/引用目录/refs.csv
 
 **缺 DOI 自动补查**：`python scripts/fetch_doi.py --refs <项目>/引用目录/refs.csv --report 报告.md`（回退链 Crossref → PubMed → OpenAlex → 出版页；`--apply` 写回，写前自动备份）。
 
-**内容级支撑核验（防张冠李戴）**：`python scripts/verify_support.py --docx <项目>/论文/文稿.docx --refs <项目>/引用目录/refs.csv`——把引用句与文献摘要做 token 覆盖率比对，输出「弱支持引用」清单供人工复核。
+**内容级支撑核验（防张冠李戴）**：`python scripts/verify_support.py --docx <项目>/论文/文稿.docx --refs <项目>/引用目录/refs.csv`——把引用句与文献摘要做 token 覆盖率比对，输出「弱支持引用」清单供人工复核；加 `--evidence-csv` 把逐句核验记录写回 refs.csv（写入前自动备份）。
+
+**链接完整性验收（v1.9，AI 改完文档后必跑）**：`python scripts/verify_links.py --docx <项目>/论文/文稿.docx`——逐条确认正文引用超链接↔文末条目书签一一对应（无悬空链接/孤立条目/孤立编号），未通过退出码 1；insert_refs 每次运行后也自动做同款检查。
 
 ### 4. 正文放占位符，插入引用
 
@@ -185,7 +198,9 @@ python scripts/insert_refs.py --docx <项目>/论文/第1章.docx <项目>/论�
 - 单句/单段堆叠编号自动告警（默认单句 ≥3、单段 ≥5 个提示拆分）；
 - 文末自动生成「参考文献」标题与目录（没有标题会自动创建；自动跳过目录 TOC 区域）；
 - 西文期刊名/书名按 GB/T 7714 自动斜体；
-- 删除中间某处引用后再跑一次，其余编号自动重排；**已定稿不想变编号** → 加 `--freeze`（key 恒定，只做增量 + 输出映射 diff）；`--audit 报告.md` 输出变更审计报告。
+- 删除中间某处引用后再跑一次，其余编号自动重排；**已定稿不想变编号** → 加 `--freeze`（key 恒定，只做增量 + 输出映射 diff）；`--audit 报告.md` 输出变更审计报告；
+- **未通过检查 = 报告失败（v1.9）**：编号不一致 / 悬空链接 / 孤立条目 / 孤立编号 / 书签重复 → 回读验证列出全部问题并退出码 1（`--warn-only` 才降级）；**缺 DOI / DOI 可疑** → 明确报告（`--strict-doi` 直接失败）；
+- **最终 Word 页面检查（必做）**：用 Word 打开最终文档，点击正文编号跳转、检查文末条目格式与 DOI 链接——不能只看脚本报告。
 
 ---
 
@@ -208,7 +223,7 @@ python scripts/insert_refs.py --docx <项目>/论文/第1章.docx <项目>/论�
 
 | 项 | 默认 | 参数 |
 |---|---|---|
-| 格式体系 | GB/T 7714-2015 | `--style gbt7714\|apa\|vancouver\|mla\|harvard` |
+| 格式体系 | GB/T 7714-2015 | `--style gbt7714\|apa\|vancouver\|mla\|harvard\|ieee` |
 | 引用样式 | 编号制，上标 `[1]` | `--citation numbered\|author-year` |
 | 编号括号 | `[]` | `--bracket ()` |
 | 悬挂缩进 | 2 字符（五号 21pt） | `--hanging-pt 21`（小四 24 / 四号 28） |
@@ -226,14 +241,15 @@ python scripts/insert_refs.py --docx <项目>/论文/第1章.docx <项目>/论�
 | `new_project.py` | 创建项目工作区（C 盘外三子目录 + refs.csv 模板） |
 | `add_refs.py` | 把题录写入 refs.csv（参数 / 交互模式，校验 type，自动备份） |
 | `rename_papers.py` | 下载的 PDF 按题名匹配重命名归档（重名自动加序号） |
-| `insert_refs.py` | **核心**：占位符 → 超链接引用；**句级引用落点 + 句号归位 + 堆叠告警**；文末目录生成/更新（取最后一个标题、跳过 TOC）；自动重编号；**`--freeze` 编号冻结 + 映射 diff**；支持多文档分章统一编号与跨文档跳转；默认西文期刊名斜体；`--mapping` 输出正文引用↔文献对照表；`--audit` 变更审计报告；`--to-placeholders` 生成纯文本草稿（交给 AI 修改不丢引用） |
-| `verify_refs.py` | **引用真实性校验**：Crossref DOI / OpenAlex 题名联网核实，判定 ✅ 已核实 / ⚠️ 有出入 / ❌ 未找到 / 🔶 无法联网；走 api_client 缓存（`--refresh-cache` 强制联网）；`--offline` 仅字段检查；`--report` 导出核对报告 |
+| `insert_refs.py` | **核心**：占位符 → 超链接引用；**句级引用落点 + 句号归位 + 堆叠告警**；文末目录生成/更新（取最后一个标题、跳过 TOC）；自动重编号；**`--freeze` 编号冻结 + 映射 diff**；支持多文档分章统一编号与跨文档跳转；默认西文期刊名斜体；`--mapping` 输出正文引用↔文献对照表；`--audit` 变更审计报告；`--to-placeholders` 生成纯文本草稿（交给 AI 修改不丢引用）；**v1.9：`--style ieee`（IEEE/TIM 格式，正文不上标）、链接完整性逐条检查（未通过退出码 1）、`--strict-doi`（缺/可疑 DOI 直接失败）** |
+| `verify_refs.py` | **引用真实性校验**：Crossref DOI / OpenAlex 题名联网核实，判定 ✅ 已核实 / ⚠️ 有出入 / ❌ 未找到 / 🔶 无法联网；走 api_client 缓存（`--refresh-cache` 强制联网）；`--offline` 仅字段检查；`--report` 导出核对报告；**v1.9：DOI 无法精确解析时显式报错（不猜填）** |
 | `fetch_doi.py` | **自动补查缺失 DOI**：回退链 Crossref → PubMed → OpenAlex → 出版页抓取，仅题名+年份+首作者全吻合才建议；`--apply` 写回前自动备份；`--report` 导出补查报告 |
-| `verify_support.py` | **内容级核验（防张冠李戴）**：引用句 ↔ 文献摘要 token 覆盖率比对，判定强/弱支持、无摘要、跨语言；`--report` 导出"弱支持引用"人工复核清单 |
+| `verify_support.py` | **内容级核验（防张冠李戴）**：引用句 ↔ 文献摘要 token 覆盖率比对，判定强/弱支持、无摘要、跨语言；`--report` 导出"弱支持引用"人工复核清单；**v1.9 `--evidence-csv`：把核验记录写回 refs.csv 的 evidence 列（写入前自动备份）** |
+| `verify_links.py` | **链接完整性独立验收（v1.9）**：对已有 docx 逐条检查正文引用超链接↔文末条目书签一一对应（无孤立编号/悬空链接/孤立条目），未通过退出码 1；**AI/他人改完文档后必跑** |
 | `merge_refs.py` | **多章节合并**：移除各章文末表、合并正文、去掉跨文档跳转、全局重编号、输出「旧编号→新编号」映射表 |
 | `api_client.py` | 公共 API 客户端：统一 UA；429/5xx 指数退避；响应落盘缓存 `scripts/_api_cache/`（7 天 TTL） |
-| `format_refs.py` | 单条题录按 gbt7714 / apa / vancouver / mla / harvard 渲染 |
-| `refs_db.py` | refs.csv 读写工具库（含 city 字段的国标完整格式） |
+| `format_refs.py` | 单条题录按 gbt7714 / apa / vancouver / mla / harvard / **ieee** 渲染（**v1.9 新增 `normalize_doi()` 精确解析 + 完整 IEEE 渲染器**） |
+| `refs_db.py` | refs.csv 读写工具库（**v1.9 表头 14 列含 evidence，旧表头显式告警**） |
 | `check_websites.py` | 18 个文献检索网站可用性检查（确定性代码判定，`--update` 写回清单） |
 | `demo/*` | 演示素材与自动化测试（`make_demo.py`、`renumber_test.py`、`author_year_test.py`、`edge_test.py`、`multi_doc_test.py`、`verify_docx.py`、`sentence_level_test.py`、`freeze_test.py`、`toc_test.py`、`merge_test.py`、`special_chars_test.py`） |
 
@@ -261,13 +277,14 @@ direct-citation-assistant/
 │   ├── new_project.py       # 创建工作区
 │   ├── add_refs.py          # 题录录入
 │   ├── rename_papers.py     # PDF 按题名归档
-│   ├── insert_refs.py       # 核心：插入引用 + 目录 + 重编号 + 句级落点 + freeze
+│   ├── insert_refs.py       # 核心：插入引用 + 目录 + 重编号 + 句级落点 + freeze + 链接检查
 │   ├── fetch_doi.py         # 自动补查缺失 DOI（回退链）
-│   ├── verify_support.py    # 引用句 ↔ 摘要内容级核验
+│   ├── verify_support.py    # 引用句 ↔ 摘要内容级核验（--evidence-csv 写回）
+│   ├── verify_links.py      # 链接完整性独立验收（v1.9）
 │   ├── merge_refs.py        # 多章节合并 + 全局重编号
 │   ├── api_client.py        # 公共 API 客户端（退避 + 缓存）
-│   ├── format_refs.py       # 5 种格式渲染
-│   ├── refs_db.py           # refs.csv 读写
+│   ├── format_refs.py       # 6 种格式渲染（含 ieee + normalize_doi）
+│   ├── refs_db.py           # refs.csv 读写（14 列表头含 evidence）
 │   ├── check_websites.py    # 网站可用性检查
 │   └── demo/                # 演示文稿 + 自动化回归测试
 └── .gitignore
@@ -291,6 +308,7 @@ python freeze_test.py        # 场景：--freeze 冻结编号 + 增量 diff + �
 python toc_test.py           # 场景：目录含 References 行 → 只落文末真实标题后
 python merge_test.py         # 场景：多章节合并 → 全局重编号 + 映射表
 python special_chars_test.py # 回归：Künzler/Dall'Angelo 等特殊字符全链路
+python v19_test.py           # v1.9：DOI 精确解析 / IEEE 渲染 / 链接完整性 / 独立验收
 python verify_docx.py 文稿.docx   # 结构完整性（正文引用 ↔ 书签一一对应）
 ```
 
@@ -308,6 +326,9 @@ python verify_docx.py 文稿.docx   # 结构完整性（正文引用 ↔ 书签�
 - **正文标注位置**：编号用上标、紧跟引文内容、放在句末标点之前（`……显著进展[1]。`），前后无空格；引用点按**句**落位，同一句堆 ≥3 个编号会告警（凑数引用应拆到各自支撑的句子上）；
 - **编号冻结**：已定稿/已送审不想全文重排 → 重跑时加 `--freeze`（key 编号恒定，增删只做增量 + 输出 diff）；状态文件在 `<docx同目录>/_refs_state/`；
 - **行距**：国标不强制，随学校/期刊模板，可在 Word 中全选参考文献段统一设置。
+- **未通过检查 = 报告失败（v1.9）**：回读/链接完整性检查未通过默认退出码 1（`--warn-only` 才降级）；缺 DOI / DOI 可疑明确报告（`--strict-doi` 直接失败，不静默删、不猜填）；
+- **refs.csv 表头必须 14 列（v1.9）**：旧表头（12 列）读取时会显式告警，未升级时新增条目会列错位，请按提示把表头补为 `key,type,…,note,evidence`；
+- **最终 Word 页面检查必做**：文档经引用/斜体/排版修改后，用 Word 打开验证跳转、条目格式、DOI 链接，不能只看 DOCX 内部属性或脚本报告。
 
 ---
 

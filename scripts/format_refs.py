@@ -8,14 +8,35 @@ format_refs.py — 引用条目格式化（论文引用 skill）
   vancouver Vancouver / ICMJE 编号式（多数生物医学期刊）
   mla       MLA 第 9 版
   harvard   Harvard 作者-年份制（Cite Them Right 风格，英国体系常用）
+  ieee      IEEE 参考文献格式（IEEE Reference Guide；TIM 等 IEEE 期刊）
 
 用法（脚本内调用）：
-    from format_refs import format_ref, gbt7714, apa, vancouver, mla, harvard
-    text = format_ref(ref_dict, style="gbt7714")
+    from format_refs import format_ref, gbt7714, apa, vancouver, mla, harvard, ieee
+    text = format_ref(ref_dict, style="ieee")
 """
 
 import re
 from datetime import datetime
+
+# ---------- DOI 精确解析（v1.9：不依赖字符剥除，防重复前缀/猜填）----------
+
+DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s，。；;<>\"'`]+")
+
+
+def normalize_doi(raw):
+    """从录入值精确提取 DOI。
+
+    兼容多种录入形态：'10.1109/TIM.2020.2978991'、
+    'https://doi.org/10.1109/TIM.2020.2978991'、'doi:10.1109/…'、
+    'DOIs: 10.1109/…'、'https://dx.doi.org/10.…'；
+    自动剥离尾随句点/逗号/括号。提取不到返回 None（视为"无可信 DOI"，
+    由上层明确报告，不猜填）。"""
+    if not raw or not str(raw).strip():
+        return None
+    m = DOI_RE.search(str(raw).strip())
+    if not m:
+        return None
+    return m.group(0).rstrip(".,;，。；)】]\"'` ") 
 
 
 # ---------- 作者串处理 ----------
@@ -219,7 +240,7 @@ def gbt7714(r):
     vol = r.get("volume", "").strip()
     iss = r.get("issue", "").strip()
     pages = r.get("pages", "").strip()
-    doi = r.get("doi", "").strip()
+    doi = normalize_doi(r.get("doi", ""))
     city = r.get("city", "").strip()
     url = r.get("url", "").strip()
     ttype = _type_tag(r.get("type", "journal"))
@@ -271,7 +292,7 @@ def apa(r):
     vol = r.get("volume", "").strip()
     iss = r.get("issue", "").strip()
     pages = r.get("pages", "").strip()
-    doi = r.get("doi", "").strip()
+    doi = normalize_doi(r.get("doi", ""))
     ttype = r.get("type", "journal")
     if ttype == "book":
         return f"{authors} ({year}). *{title}*. {src}."
@@ -299,7 +320,7 @@ def vancouver(r):
     vol = r.get("volume", "").strip()
     iss = r.get("issue", "").strip()
     pages = r.get("pages", "").strip()
-    doi = r.get("doi", "").strip()
+    doi = normalize_doi(r.get("doi", ""))
     src_it = f"*{src}*" if src and not _is_cjk(src) else src
     seg = []
     if authors:
@@ -337,8 +358,9 @@ def mla(r):
     if pages:
         seg.append(f"pp. {pages}.")
     seg.append(f"{year}.")
-    if r.get("doi", "").strip():
-        seg.append(f"https://doi.org/{r['doi'].strip()}.")
+    doi = normalize_doi(r.get("doi", ""))
+    if doi:
+        seg.append(f"https://doi.org/{doi}.")
     return " ".join(x for x in seg if x)
 
 
@@ -380,7 +402,7 @@ def harvard(r):
     vol = r.get("volume", "").strip()
     iss = r.get("issue", "").strip()
     pages = r.get("pages", "").strip()
-    doi = r.get("doi", "").strip()
+    doi = normalize_doi(r.get("doi", ""))
     city = r.get("city", "").strip()
     url = r.get("url", "").strip()
     ttype = r.get("type", "journal")
@@ -418,8 +440,203 @@ def harvard(r):
     return base
 
 
+# ---------- IEEE（TIM 等 IEEE 期刊，v1.9 新增）----------
+
+# IEEE 常用期刊全称 → 官方缩写（IEEE Reference Guide 附录 IV）。
+# source 字段命中全称时自动替换；未命中保持原样并在校验层提示手填缩写。
+IEEE_JOURNAL_ABBREV = {
+    "IEEE Transactions on Instrumentation and Measurement":
+        "IEEE Trans. Instrum. Meas.",
+    "IEEE Transactions on Industrial Electronics":
+        "IEEE Trans. Ind. Electron.",
+    "IEEE Transactions on Industrial Informatics":
+        "IEEE Trans. Ind. Informat.",
+    "IEEE Transactions on Power Electronics":
+        "IEEE Trans. Power Electron.",
+    "IEEE Transactions on Signal Processing":
+        "IEEE Trans. Signal Process.",
+    "IEEE Transactions on Instrumentation & Measurement":
+        "IEEE Trans. Instrum. Meas.",
+    "IEEE Sensors Journal": "IEEE Sensors J.",
+    "IEEE Transactions on Neural Networks and Learning Systems":
+        "IEEE Trans. Neural Netw. Learn. Syst.",
+    "IEEE Transactions on Pattern Analysis and Machine Intelligence":
+        "IEEE Trans. Pattern Anal. Mach. Intell.",
+    "IEEE Transactions on Geoscience and Remote Sensing":
+        "IEEE Trans. Geosci. Remote Sens.",
+    "IEEE Journal of Solid-State Circuits": "IEEE J. Solid-State Circuits",
+    "IEEE Transactions on Antennas and Propagation":
+        "IEEE Trans. Antennas Propag.",
+    "IEEE Communications Magazine": "IEEE Commun. Mag.",
+    "IEEE Access": "IEEE Access",
+    "Nature": "Nature",
+    "Science": "Science",
+    "Proceedings of the IEEE": "Proc. IEEE",
+}
+
+IEEE_MONTHS = {
+    "jan": "Jan.", "feb": "Feb.", "mar": "Mar.", "apr": "Apr.",
+    "may": "May", "jun": "Jun.", "jul": "Jul.", "aug": "Aug.",
+    "sep": "Sep.", "oct": "Oct.", "nov": "Nov.", "dec": "Dec.",
+}
+
+
+def abbrev_journal(source):
+    """把期刊全称替换为 IEEE 官方缩写；未命中保持原样。"""
+    if not source:
+        return ""
+    return IEEE_JOURNAL_ABBREV.get(source.strip(), source.strip())
+
+
+def _ieee_month(year_month):
+    """'Feb 2025' / '2025-02' / '2025' -> 'Feb. 2025' / 'Feb. 2025' / '2025'"""
+    if not year_month:
+        return ""
+    s = str(year_month).strip()
+    # 2025-02 / 2025/02 / 02.2025
+    m = re.match(r"^(\d{4})[-/.](\d{1,2})$", s)
+    if m:
+        mn = IEEE_MONTHS.get(
+            ["jan", "feb", "mar", "apr", "may", "jun",
+             "jul", "aug", "sep", "oct", "nov", "dec"][int(m.group(2)) - 1])
+        return f"{mn} {m.group(1)}"
+    # Feb 2025 / February 2025
+    m = re.match(r"^([A-Za-z]+)[\s.]*(\d{4})$", s)
+    if m:
+        mn = IEEE_MONTHS.get(m.group(1).lower()[:3])
+        return f"{mn} {m.group(2)}" if mn else s
+    return s
+
+
+def _ieee_single(a):
+    """IEEE 单作者：名缩写（每名一个字母带点）在前、姓在后。
+    'Smith, J.' -> 'J. Smith'；'Vaswani, A.' -> 'A. Vaswani'；中文原样。"""
+    a = a.strip()
+    if _is_cjk(a):
+        return a
+    if "," in a:
+        surname, given = a.split(",", 1)
+        initials = [w.strip().rstrip(".") for w in
+                    re.findall(r"[A-Z][^,\s]*", given.upper())]
+        # 复合缩写 J.-F. -> 'J.-F.'；普通 A. -> 'A.'
+        initials = " ".join(w if "-" in w else w[0] + "." for w in initials)
+        return f"{initials} {surname.strip()}".strip()
+    words = a.split()
+    if len(words) == 1:
+        return a
+    surname = words[-1]
+    initials = " ".join(w[0].upper() + "." for w in words[:-1])
+    return f"{initials} {surname}".strip()
+
+
+def _ieee_authors(raw, max_a=6):
+    """IEEE 作者列表：'J. Smith, K. Jones, and L. Lee'；>6 个作者用 et al.
+    （IEEE 规范：最多列 6 位，超出用 et al.）"""
+    lst = [_ieee_single(a) for a in _split_authors(raw)]
+    if not lst:
+        return ""
+    if len(lst) == 1:
+        return lst[0]
+    if len(lst) <= max_a:
+        return ", ".join(lst[:-1]) + ", and " + lst[-1]
+    return ", ".join(lst[:max_a]) + ", et al."
+
+
+def ieee(r):
+    """IEEE 参考文献格式（IEEE Reference Guide；TIM 等 IEEE 期刊采用）。
+
+    期刊：J. K. Author, "Title," Abbrev. J. Name, vol. x, no. x,
+          pp. xxx-xxx, Abbrev. Month, year, doi: 10.xxxx/xxx.
+    会议：J. K. Author, "Title," in Proc. Abbrev. Conf. Name, City,
+          State, Country, year, pp. xxx-xxx.
+    专著：J. K. Author, Title. City, State, Country: Publisher, year, pp.
+    学位论文：J. K. Author, "Title," Ph.D. dissertation, Dept., Univ.,
+              City, State, year.
+    网页：J. K. Author, "Title," Site Name, year. [Online]. Available: URL
+    正文编号不带上标（IEEE 正文引用 [1] 为行内方括号）。"""
+    authors = _ieee_authors(r.get("authors", ""))
+    title = r.get("title", "").strip()
+    src = abbrev_journal(r.get("source", "").strip())
+    year = r.get("year", "").strip()
+    vol = r.get("volume", "").strip()
+    iss = r.get("issue", "").strip()
+    pages = r.get("pages", "").strip()
+    doi = normalize_doi(r.get("doi", ""))
+    city = r.get("city", "").strip()
+    url = r.get("url", "").strip()
+    month = _ieee_month(r.get("month", "") or year)
+    ttype = r.get("type", "journal")
+    # 作者段（IEEE 不用句号收尾，后接题名）
+    head = authors or ""
+    ymo = month or year
+    if ttype == "book":
+        src_it = f"*{src}*" if src and not _is_cjk(src) else src
+        base = f'{head}, *{title}*.' if head else f"*{title}*."
+        if city:
+            base += f" {city}: {src_it}," if src_it else f" {city}."
+        elif src_it:
+            base += f" {src_it}."
+        if year:
+            base += f" {year}."
+        if pages:
+            base += f" pp. {pages}."
+        if doi:
+            base += f" doi: {doi}."
+        return base
+    if ttype == "thesis":
+        degree = "Ph.D. dissertation"
+        base = (f'{head}, "{title}," {degree}' if head
+                else (f'"{title}," {degree}' if title else degree))
+        if city:
+            base += f", {city}"
+        if src:
+            base += f", {src}"
+        if year:
+            base += f", {year}"
+        base += "."
+        if doi:
+            base += f" doi: {doi}."
+        return base
+    if ttype == "web":
+        base = (f'{head}, "{title}," {src}' if head
+                else (f'"{title}," {src}' if title else src))
+        if year:
+            base += f", {year}"
+        base += ". [Online]. Available: " + (url or "")
+        return base
+    if ttype == "conference":
+        base = (f'{head}, "{title}," in {src}' if head
+                else (f'"{title}," in {src}' if title else f"in {src}"))
+        if city:
+            base += f", {city}"
+        if year:
+            base += f", {year}"
+        if pages:
+            base += f", pp. {pages}"
+        base += "."
+        if doi:
+            base += f" doi: {doi}."
+        return base
+    # 期刊（默认）
+    src_it = f"*{src}*" if src and not _is_cjk(src) else src
+    base = (f'{head}, "{title}," {src_it}' if head
+            else (f'"{title}," {src_it}' if title else src_it))
+    if vol:
+        base += f", vol. {vol}"
+    if iss:
+        base += f", no. {iss}"
+    if pages:
+        base += f", pp. {pages}"
+    if ymo:
+        base += f", {ymo}"
+    base += "."
+    if doi:
+        base += f" doi: {doi}."
+    return base
+
+
 FORMATS = {"gbt7714": gbt7714, "apa": apa, "vancouver": vancouver,
-           "mla": mla, "harvard": harvard}
+           "mla": mla, "harvard": harvard, "ieee": ieee}
 
 
 def format_ref(r, style="gbt7714"):

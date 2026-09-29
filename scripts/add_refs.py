@@ -59,6 +59,7 @@ def interactive(refs):
     r["doi"] = _ask("DOI")
     r["url"] = _ask("来源链接")
     r["note"] = _ask("支撑句子/用途说明")
+    r["evidence"] = _ask("逐句证据核验记录（论断|出处|核验深度|支持程度）")
     if not r["title"]:
         print("未填题名，放弃添加。")
         return False

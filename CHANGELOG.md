@@ -2,6 +2,49 @@
 
 本项目所有重要变更记录于此。版本线按功能里程碑划分，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [v1.9.0] - 2026-09-29
+
+### 主题：验收门槛硬化——把"建议人工抽查"改成"未通过检查就报告失败"
+
+用户评审结论：v1.8 已实现大部分功能与检查要求，但多为"建议人工抽查"；本次把每类要求都改成**未通过即失败**（默认退出码 1，`--warn-only` 才降级为警告）。
+
+**1. 逐句证据核验记录（evidence 字段）**
+- `refs_db.py`：`REFS_HEADER` 扩为 14 列，新增 `evidence` 列（`key,type,…,note,evidence`）；docstring 规定建议格式「论断 | 出处（段/页/图） | 核验深度（全文/摘要） | 支持程度（强/弱/待核实）」，**无法确认标「待核实」，不得自动挪引文**
+- `verify_support.py --evidence-csv`：核验后把每条 key 的结论写回 refs.csv 的 evidence 列（✅强支持→强、⚠️弱支持→弱、无摘要/跨语言/表中无 key→待核实）；写入前自动备份；输出「待核实」清单提醒人工补正
+- `add_refs.py` 交互模式新增 evidence 录入；`insert_refs.py --mapping` 展示 evidence 列
+
+**2. Word 链接完整性检查（逐条验收，未通过即失败）**
+- `insert_refs.py` 新增 `verify_docx_links()`：逐个确认 ①正文引用超链接（anchor=ref_key）在文末都有对应书签（无悬空链接）②文末每个书签都被正文引用（无孤立条目）③编号制下正文编号集合与文末条目编号集合一致（无孤立编号/悬空编号）④编号↔条目一致（key_to_num 核对，防张冠李戴）⑤无重复书签
+- 第 9 步回读验证升级：编号不一致/书签重复/链接不完整全部进 fail 列表，**未通过默认 `sys.exit(1)`**（--warn-only 仅警告）
+- 新增 `scripts/verify_links.py`：独立验收入口——**AI/他人改完文档后必跑**（`python verify_links.py --docx 文稿.docx`，多文档 `--main` 指定主文档），未通过退出码 1
+
+**3. DOI 保留与检查（精确解析，不静默删、不猜填）**
+- `format_refs.py` 新增 `DOI_RE` + `normalize_doi()`：兼容裸 DOI / `doi:` / `https://doi.org/` / `dx.doi.org` / `DOIs:` 等录入形态，自动剥离尾随标点；提取不到返回 None（视为无可信 DOI）
+- gbt7714/apa/vancouver/mla/harvard 五处 DOI 拼接全部改走 `normalize_doi`（修复录入值自带 `https://doi.org/` 前缀时重复前缀的隐患）
+- `insert_refs.py`：文末表生成后输出**缺 DOI / DOI 可疑清单**（明确报告、提示 fetch_doi 补查，不静默删）；新增 `--strict-doi` 未通过直接失败
+- `verify_refs.py`：DOI 录入值无法精确解析时显式报"无法解析——不猜填"，校验转 OpenAlex 题名兜底
+
+**4. 按目标期刊建立格式配置（IEEE/TIM）**
+- `format_refs.py` 新增完整 **IEEE 渲染器**（IEEE Reference Guide）：
+  - `IEEE_JOURNAL_ABBREV` 官方缩写表（TIM→`IEEE Trans. Instrum. Meas.`、TII、TPEL、TSP、Nature、Science、Proc. IEEE 等 17 项）
+  - `IEEE_MONTHS` 月份缩写（Jan./Feb./…/Dec.）；`_ieee_month()` 解析 `2025-02`/`Feb 2025`/`2025`，无 month 时回退年份
+  - `_ieee_authors()`：名缩写在前姓在后、最多列 6 人、第 7 人起 `et al.`；修复作者段在期刊/会议/学位论文/网页分支漏接的问题
+  - 期刊条目 `J. K. Author, "Title," Abbrev. J., vol. x, no. x, pp. xxx-xxx, month, year, doi: …`；会议/专著/学位论文/网页分类型
+  - `FORMATS` 现支持 6 种样式：gbt7714/apa/vancouver/mla/harvard/**ieee**
+- `insert_refs.py --style ieee`：正文编号**不上标**（IEEE 行内方括号 [1]，`--superscript` 可覆盖）；`--style` choices 加入 ieee
+
+**5. 最终 Word 页面检查列为必做项**
+- `SKILL.md` 步骤 5c 明确：文档经引用/斜体/排版修改后**必须用 Word 打开做页面级检查**（点击跳转、条目格式、DOI 链接、缩进/分页），**不能只依赖 DOCX 内部属性或脚本报告**
+- `verify_links.py` 作为自动化回读手段（AI 改稿后必跑），页面检查作为最终人工必做项
+
+**6. 配套兼容性修复**
+- `demo/refs.csv` 表头升级为 14 列（含 city/evidence）；`refs_db.load_refs` 检测旧表头并显式告警（防止旧表头 + 新行导致列错位）
+
+### 测试与工程
+- 新增 `demo/v19_test.py` 回归测试（A. normalize_doi 7 断言 / B. IEEE 渲染多类型 / C. insert --style ieee 端到端含不上标+DOI 链接 / D. verify_docx_links 悬空/孤立条目/孤立编号检出 / E. verify_links.py 独立验收 exit0/exit≠0）
+- 全量回归 12/12 全绿：v19 + 既有 11 项（author_year / edge / freeze / merge / multi_doc / renumber / sentence_level / special_chars / toc / verify_refs / year_suffix）
+- 修复 IEEE 渲染器作者段漏接 bug（v1.9 开发中发现并修复，新增断言覆盖）
+
 ## [v1.8.0] - 2026-09-29
 
 ### 新增（按用户实测反馈的 8 项改进）
@@ -190,4 +233,4 @@
 - 其余 14 项优化：无 Hyperlink 样式时补蓝色下划线 fallback、`--refs` 缺失时工作区路径提示、备份保留 30 份、MLA DOI 补 `https://doi.org/` 前缀、307/308 重定向计可达、标题宽容匹配避免重复建标题、类型校验、路径动态化、中文作者拼音排序、GB 混排截断符号语种判断、PDF 重名加序号、回读验证同步、死代码清理、author-year 自动化回归
 
 ---
-*版本号说明：本仓库已随以上变更发布至 v1.8.0；后续变更将持续在此文件记录。*
+*版本号说明：本仓库已随以上变更发布至 v1.9.0；后续变更将持续在此文件记录。*

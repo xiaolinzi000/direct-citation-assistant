@@ -39,6 +39,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from refs_db import load_refs
 from api_client import fetch_json
+from format_refs import normalize_doi
 
 UA = None  # UA 统一由 api_client 管理
 
@@ -127,6 +128,14 @@ def verify(ref, offline, use_cache=True):
         return "⬜ 字段检查", "（--offline 未联网）", issues
 
     doi = (ref.get("doi") or "").strip()
+    if doi:
+        norm_doi = normalize_doi(doi)
+        if norm_doi is None:
+            # v1.9：DOI 有值但无法精确解析 → 明确报告，不猜填、不静默删，
+            # 校验改走题名路径（OpenAlex 兜底）
+            issues.append(f"DOI 无法解析（录入值「{doi[:40]}」不是合法 DOI）"
+                          f"——不猜填，请人工核对或补录")
+            doi = ""
     if doi:
         found, c_title, c_year, c_src, c_vol, c_iss, c_page, err = \
             check_crossref(doi, use_cache)

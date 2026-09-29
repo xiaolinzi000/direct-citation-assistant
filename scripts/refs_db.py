@@ -20,6 +20,11 @@ refs_db.py — 引用信息库读写模块（论文引用 skill）
     doi       DOI（不带 https://doi.org/）
     url       来源链接（Google Scholar / 原文页；网页[EB/OL] 类型必须填）
     note      支撑的句子/用途说明（写论文时填写）
+    evidence  逐句证据核验记录（v1.9 新增）：该文献支撑的论断、
+              查到的原文出处（段落/页码/图表）、核验深度（全文/摘要）、
+              支持程度（强/弱/待核实）。建议格式：
+              「论断 | 出处（段/页/图） | 核验深度 | 支持程度」，
+              用 | 分隔；无法确认时支持程度写「待核实」，不得自动挪引文。
 """
 
 import csv
@@ -30,7 +35,8 @@ import sys
 from datetime import datetime
 
 REFS_HEADER = ["key", "type", "title", "authors", "source", "year",
-               "volume", "issue", "pages", "city", "doi", "url", "note"]
+               "volume", "issue", "pages", "city", "doi", "url", "note",
+               "evidence"]
 
 VALID_TYPES = ("journal", "conference", "book", "thesis", "web")
 
@@ -47,6 +53,16 @@ def load_refs(path):
         return []
     with io.open(path, "r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
+        # v1.9：表头列数检测——旧版 refs.csv 缺 city/evidence 列时，
+        # 新写入的行（按 14 列写）会被旧表头错位读取，必须显式告警，
+        # 引导用户一次性升级表头（不静默改写用户数据）。
+        if reader.fieldnames:
+            have = [h.strip() for h in reader.fieldnames]
+            missing = [h for h in REFS_HEADER if h not in have]
+            if missing:
+                print(f"⚠ 引用表 {path} 的表头缺少列：{', '.join(missing)}。\n"
+                      f"   请把表头升级为 14 列 {', '.join(REFS_HEADER)}（数据列对应补位），"
+                      f"否则 v1.9 起新增条目会列错位。")
         refs = []
         for row in reader:
             d = {k: (row.get(k) or "").strip() for k in REFS_HEADER}

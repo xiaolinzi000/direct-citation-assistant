@@ -24,6 +24,19 @@ v1.8 新增（句级落点 + 严格引用，默认行为）：
   7. 变更审计报告：--audit <路径>.md 输出新增/移除/移位引用句、
      编号映射与堆叠告警，配合 _backup/ 一键回滚。
 
+v1.9 新增（验收门槛硬化，未通过即报告失败）：
+  8. 链接完整性检查：逐条确认正文引用超链接指向文末对应条目，
+     文内编号与条目一一对应，无孤立编号/悬空链接；AI 改完文档后
+     重跑或独立运行 verify_links.py 再检查一次。未通过默认退出码 1。
+  9. DOI 保留与检查：有可靠 DOI 一律保留并渲染可点击链接；来源表缺
+     DOI 或 DOI 无法解析时输出明确报告（不静默删、不猜填）；--strict-doi
+     时未通过直接失败。DOI 前缀解析改为精确正则（format_refs.normalize_doi）。
+  10. IEEE/TIM 格式：--style ieee（IEEE Reference Guide；正文编号不上标、
+      条目按 IEEE 规范：作者名缩写在前、期刊缩写、vol./no./pp.、doi:）。
+  11. 逐句证据核验记录：refs.csv 新增 evidence 字段（论断|出处|核验深度|
+      支持程度），verify_support.py --evidence-csv 可把核验结果写回；
+      无法确认的标「待核实」，不自动挪引文。
+
 引用点（正文中）：
   [?]            —— 按出现顺序自动取 refs.csv 中尚未被引用的下一条
   [CITE:key]     —— 指定引用 refs.csv 中 key 对应的条目
@@ -1322,6 +1335,111 @@ def write_audit_report(path, docs, main_idx, key_to_num, used_keys,
         f.write("\n".join(lines) + "\n")
 
 
+# ---------- 链接完整性检查（v1.9：逐条验收，未通过即报告失败）----------
+
+def verify_docx_links(docx_paths, main_idx, citation_mode="numbered",
+                      key_to_num=None):
+    """逐个确认文档引用体系完整：
+
+      1. 悬空链接：每个正文引用超链接（anchor=ref_key）在主文档文末
+         都有对应书签（ref_key）；
+      2. 孤立条目：文末每个书签都有正文引用（没有"表里有、正文没引"）；
+      3. 编号一一对应（编号制）：正文出现的编号集合与文末条目编号集合
+         完全一致——无孤立编号、无悬空编号、无重复书签；
+      4. 编号↔条目一致（编号制，需提供 key_to_num）：正文 [n] 的 key
+         与文末 [n] 条目（按 key_to_num）一致，防止张冠李戴。
+
+    返回 (ok, issues)；issues 为逐条描述列表。"""
+    issues = []
+    body_anchors = {}    # key -> [num or label]
+    body_nums = set()
+    for di, path in enumerate(docx_paths):
+        try:
+            _items, doc_root, _styles = load_docx(path)
+        except Exception as e:
+            issues.append(f"无法读取文档 {os.path.basename(path)}：{type(e).__name__}")
+            continue
+        body = doc_root.find(w("body"))
+        if body is None:
+            issues.append(f"{os.path.basename(path)}：文档无 body（结构异常）")
+            continue
+        for h in body.iter(w("hyperlink")):
+            if not is_ref_hyperlink(h):
+                continue
+            anchor = h.get(w("anchor")) or ""
+            key = anchor[4:] if anchor.startswith("ref_") else anchor
+            txt = "".join(run_text(r) for r in h.findall(w("r"))).strip()
+            m = re.search(r"\[(\d+)\]", txt)
+            num = int(m.group(1)) if m else txt
+            body_anchors.setdefault(key, []).append(num)
+            if isinstance(num, int):
+                body_nums.add(num)
+    # 主文档文末条目：书签 + 条目编号
+    main_items, main_root, _ms = load_docx(docx_paths[main_idx])
+    main_body = main_root.find(w("body"))
+    entry_bookmarks = {}
+    for bs in main_root.iter(w("bookmarkStart")):
+        nm = bs.get(w("name")) or ""
+        if nm.startswith("ref_"):
+            entry_bookmarks[nm[4:]] = True
+    entry_nums = set()
+    if main_body is not None:
+        for p in main_body.iter(w("p")):
+            has_ref = any((bs.get(w("name")) or "").startswith("ref_")
+                          for bs in p.iter(w("bookmarkStart")))
+            if not has_ref:
+                continue
+            txt = para_text(p).strip()
+            m = re.match(r"\[?(\d+)\]?", txt)
+            if m:
+                entry_nums.add(int(m.group(1)))
+    # 1) 悬空链接：正文 anchor 无对应文末书签
+    for key, nums in sorted(body_anchors.items()):
+        if key not in entry_bookmarks:
+            issues.append(f"悬空链接：正文引用 key={key}（{nums}）在文末没有对应条目书签")
+    # 2) 孤立条目：文末书签无正文引用
+    for key in sorted(entry_bookmarks):
+        if key not in body_anchors:
+            issues.append(f"孤立条目：文末书签 ref_{key} 在正文中没有被引用")
+    # 3) 编号一一对应（编号制）
+    if citation_mode == "numbered":
+        if body_nums != entry_nums:
+            only_body = sorted(body_nums - entry_nums)
+            only_entry = sorted(entry_nums - body_nums)
+            if only_body:
+                issues.append(f"孤立编号：正文出现但文末无条目 {only_body}")
+            if only_entry:
+                issues.append(f"悬空编号：文末有条目但正文无引用 {only_entry}")
+        # 4) 编号↔条目一致
+        if key_to_num:
+            for key, nums in sorted(body_anchors.items()):
+                want = key_to_num.get(key)
+                if want is None:
+                    continue
+                for n in nums:
+                    if isinstance(n, int) and n != want:
+                        issues.append(
+                            f"编号↔条目不一致：正文 key={key} 显示 [{n}]，"
+                            f"但编号方案为 [{want}]（文末条目 {want} 对应 key={key}）")
+    return not issues, issues
+
+
+def missing_doi_entries(used_keys, refs_by_key):
+    """列出缺 DOI / DOI 无法解析的条目（v1.9：不静默删、不猜填）。
+    返回 [(key, title, 原始 doi 值)]；有值但无法解析的单独标注可疑。"""
+    from format_refs import normalize_doi
+    missing = []
+    suspicious = []
+    for key in used_keys:
+        ref = refs_by_key.get(key, {})
+        raw = (ref.get("doi") or "").strip()
+        if not raw:
+            missing.append((key, (ref.get("title") or "")[:60], ""))
+        elif normalize_doi(raw) is None:
+            suspicious.append((key, (ref.get("title") or "")[:60], raw))
+    return missing, suspicious
+
+
 # ---------- 主流程 ----------
 
 def main():
@@ -1333,9 +1451,15 @@ def main():
                     help="主文档路径（参考文献表所在，默认最后一个 --docx）")
     ap.add_argument("--refs", default=None, help="refs.csv 路径（默认 docx 同目录）")
     ap.add_argument("--style", default="gbt7714",
-                    choices=["gbt7714", "apa", "vancouver", "mla", "harvard"])
+                    choices=["gbt7714", "apa", "vancouver", "mla", "harvard",
+                             "ieee"],
+                    help="格式体系：gbt7714 / apa / vancouver / mla / harvard / "
+                         "ieee（IEEE 期刊如 TIM 采用：正文编号不上标、条目按 "
+                         "IEEE Reference Guide）")
     ap.add_argument("--heading", default="", help="参考文献标题文本（找不到时创建）")
     ap.add_argument("--no-superscript", action="store_true", help="正文编号不用上标")
+    ap.add_argument("--superscript", action="store_true",
+                    help="正文编号强制用上标（ieee 样式默认不上标，用此参数覆盖）")
     ap.add_argument("--bracket", default="[]", help="正文编号括号，如 [] 或 ()")
     ap.add_argument("--entry-num", default="bracket", choices=["bracket", "num"],
                     help="文末条目编号样式")
@@ -1384,6 +1508,12 @@ def main():
                     help="不读写编号状态文件（无编号 diff、--freeze 不可用）")
     ap.add_argument("--state", default="",
                     help="自定义编号状态文件路径（默认 <主文档同目录>/_refs_state/<主文档名>.json）")
+    ap.add_argument("--strict-doi", action="store_true",
+                    help="文末条目存在缺 DOI / DOI 无法解析时直接失败退出"
+                         "（默认只输出缺失清单，不静默删、不猜填）")
+    ap.add_argument("--warn-only", action="store_true",
+                    help="回读/链接完整性检查未通过时仅警告，不退出非零"
+                         "（默认：未通过检查就报告失败）")
     args = ap.parse_args()
 
     docx_list = [os.path.abspath(d) for d in args.docx]
@@ -1467,7 +1597,10 @@ def main():
 
     # 4. 更新/插入正文引用（样式取自主文档）
     bracket = args.bracket if len(args.bracket) == 2 else "[]"
-    superscript = not args.no_superscript
+    # ieee 样式按 IEEE 规范正文编号为行内方括号（不上标）；
+    # 其他样式默认上标；--superscript / --no-superscript 可显式覆盖。
+    superscript = (args.superscript
+                   or (not args.no_superscript and args.style != "ieee"))
     refs_by_key = {r["key"]: r for r in refs}
     year_suffix = {}
     if args.citation == "author-year":
@@ -1503,6 +1636,20 @@ def main():
         items=main_doc["items"], hyperlink_style_id=hyperlink_style_id,
         year_suffix=year_suffix,
         num_map=key_to_num if args.freeze and args.citation == "numbered" else None)
+
+    # 5b. DOI 保留与检查（v1.9）：缺 DOI / DOI 可疑 → 明确报告，不静默
+    missing_doi, suspicious_doi = missing_doi_entries(used_keys, refs_by_key)
+    if missing_doi or suspicious_doi:
+        print("\n⚠ DOI 检查：以下被引用的条目缺 DOI 或 DOI 无法解析（不静默删、不猜填）：")
+        for key, title, _ in missing_doi:
+            print(f"  [缺] {key}：{title}")
+        for key, title, raw in suspicious_doi:
+            print(f"  [疑] {key}：{title}（录入值无法解析：{raw[:60]}）")
+        print("  处理：用 fetch_doi.py 自动补查（--apply 写回），或人工到出版社页面补录；")
+        print("        verify_support.py / 文末条目会保留缺失状态，不会自动编造 DOI。")
+        if args.strict_doi and (missing_doi or suspicious_doi):
+            print("--strict-doi：存在缺 DOI / 可疑 DOI，按失败处理。")
+            sys.exit(1)
 
     # 5. 非主文档：引用超链接指向主文档（跨文档跳转）
     cross_count = 0
@@ -1580,6 +1727,9 @@ def main():
                     note = (ref.get("note") or "").strip()
                     if note:
                         print(f"       note：{note[:100]}")
+                    ev = (ref.get("evidence") or "").strip()
+                    if ev:
+                        print(f"       evidence：{ev[:120]}")
         print()
 
     # 5c. 堆叠告警（句级落点检查：单句/单段堆叠编号提示拆分）
@@ -1626,7 +1776,7 @@ def main():
                            args, bpaths, stack_warns, num_diff)
         print(f"变更审计报告：{args.audit}")
 
-    # 9. 回读验证
+    # 9. 回读验证（v1.9：编号一致性 + 链接完整性逐条检查，未通过即报告失败）
     all_nums = []
     for i, x in enumerate(docs):
         items2, doc_root2, _ = load_docx(x["path"])
@@ -1645,21 +1795,39 @@ def main():
                 m = re.search(r"\d+", "".join(run_text(r) for r in h.findall(w("r"))))
                 if m:
                     all_nums.append(int(m.group()))
+    fail = []
     if args.citation == "numbered":
         expected = (set(key_to_num.values()) if args.freeze
                     else set(range(1, entry_count + 1)))
         if set(all_nums) != expected:
-            print(f"警告：编号不一致！全文正文编号 {sorted(all_nums)}，"
-                  f"期望 {sorted(expected)}，"
-                  f"缺失 {sorted(expected - set(all_nums))}，"
-                  f"多余 {sorted(set(all_nums) - expected)}")
+            fail.append(f"编号不一致：全文正文编号 {sorted(set(all_nums))}，"
+                        f"期望 {sorted(expected)}，"
+                        f"缺失 {sorted(expected - set(all_nums))}，"
+                        f"多余 {sorted(set(all_nums) - expected)}")
         else:
             print("编号一致性验证通过（全文跨文档）。")
     bookmarks = [bs.get(w("name")) for bs in main_doc["root"].iter(w("bookmarkStart"))
                  if (bs.get(w("name")) or "").startswith("ref_")]
     print(f"文末书签 {len(bookmarks)} 个")
     if len(set(bookmarks)) != len(bookmarks):
-        print("警告：书签名重复！")
+        fail.append(f"书签名重复：{sorted(set(b for b in bookmarks if bookmarks.count(b) > 1))}")
+    # v1.9：链接完整性逐条检查（悬空链接 / 孤立条目 / 孤立编号 / 编号↔条目一致）
+    link_ok, link_issues = verify_docx_links(
+        docx_list, main_idx, args.citation,
+        key_to_num if args.citation == "numbered" else None)
+    fail.extend(link_issues)
+    if fail:
+        print("\n❌ 回读验证未通过（未通过检查 = 报告失败）：")
+        for iss in fail:
+            print(f"  - {iss}")
+        if args.warn_only:
+            print("--warn-only：以上仅警告，本次不按失败处理。")
+        else:
+            print("请修复后重跑；若确认无误可加 --warn-only 放行。")
+            sys.exit(1)
+    else:
+        print("链接完整性检查通过：正文引用↔文末条目逐条对应，"
+              "无孤立编号/悬空链接/悬空条目。")
 
 
 if __name__ == "__main__":
