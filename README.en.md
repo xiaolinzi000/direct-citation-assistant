@@ -33,11 +33,17 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 | 🎯 Three search principles | Strongest evidence first → newest first → highest citation count; covers both Chinese & English literature |
 | 🔗 Hyperlink citations | In-text numbers (superscript by default) are **clickable and jump** to the matching entry in the reference list; entry **DOIs are clickable too** and open the paper page |
 | 📚 Multi-doc chapters | Process several `.docx` chapters at once with one continuous numbering; citations **jump across documents** to the main document's reference list (verified in Word) |
-| 🔢 Auto renumbering | Re-run after deleting / adding a citation — numbers update automatically, no manual fixing |
-| 📑 Four formats | GB/T 7714 (default), APA, Vancouver, MLA; numbered + author-year (**a/b suffixes auto-applied for same author & year**) |
+| 🔢 Auto renumbering | Re-run after deleting / adding a citation — numbers update automatically, no manual fixing; **`--freeze` pins numbers per key** (e.g. collet2020 stays 1), edits become incremental with an "old → new" mapping diff |
+| 📑 Five formats | GB/T 7714 (default), APA, Vancouver, MLA, **Harvard**; numbered + author-year (**a/b suffixes auto-applied for same author & year**) |
 | ✒️ Italic by spec | Western journal/book names automatically italic per GB/T 7714; Chinese journal names stay upright (`--no-italic-source` to disable) |
 | 🔎 Citation authenticity | **No fabricated references**: `verify_refs.py` checks each entry online via Crossref DOI / OpenAlex title — ✅ verified / ⚠️ mismatch / ❌ not found / 🔶 offline — plus field completeness & the `note` support sentence |
 | 🔗 Citation mapping | `insert_refs.py --mapping` prints a "in-text ↔ reference" table (number, sentence, `note`) to verify every citation actually backs its sentence |
+| 🎯 Sentence-level anchors | Citation points are extracted **per sentence** — each number sits right after the sentence it backs (no end-of-paragraph stacking); numbers misplaced after a period are auto-corrected; **stacked numbers per sentence/paragraph are flagged** |
+| 📄 Change audit | `--audit` outputs the number-mapping diff / citation-point list / stacking warnings / reference-list entries / backup & rollback inventory |
+| 🧭 TOC-safe placement | The reference list targets the **last** References/参考文献 heading and **skips TOC regions** — entries never land inside a table of contents |
+| 🔄 API fallback chain | All network checks go through `api_client` (exponential backoff on 429/5xx + 7-day on-disk cache); `fetch_doi.py` auto-fills missing DOIs via Crossref → PubMed → OpenAlex → publisher page |
+| 📖 Content-level support check | `verify_support.py` aligns each citation sentence against the paper's abstract (token coverage) and prints a "weakly supported" list (catches wrong-paper citations); cross-language cases are flagged for manual review |
+| 🧬 Multi-chapter merge | `merge_refs.py` merges independently numbered chapters into one document, renumbers globally and prints an "old → new number" mapping table |
 | 🌐 Site checks | Built-in list of 18 literature-search sites, availability checked by code, with scheduled updates |
 | 📝 Complete GB format | Journal, conference, **book [M], thesis [D], web page [EB/OL]** all rendered per GB/T 7714 |
 | 🀄 Chinese friendly | Chinese keys in placeholders (`[CITE:注意力机制]`), case-insensitive; Chinese references & journal names handled automatically |
@@ -57,7 +63,17 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 
 ## 🆕 What's New
 
-**v1.7.1 (latest)**
+**v1.8.0 (latest)**
+- 🎯 **Sentence-level anchors (top priority)**: citations no longer pile up at paragraph ends — points are extracted per sentence and each number lands right after the sentence it backs; numbers misplaced after a period auto-correct; stacked numbers per sentence/paragraph are flagged
+- 🔒 **Number freezing + incremental updates**: with `--freeze`, each key keeps its number (collet2020 stays 1); edits become incremental with an "old → new number" mapping diff; state is persisted to `_refs_state/`
+- 🧭 **TOC fix**: placement targets the last References/参考文献 heading and skips TOC regions (no more entries landing inside a table of contents)
+- 🔄 **DOI fallback chain**: new `fetch_doi.py` (Crossref → PubMed → OpenAlex → publisher page) and `api_client.py` (exponential backoff + on-disk cache — no more repeated 429s)
+- 📖 **Content-level support check**: new `verify_support.py` — token-coverage alignment of citation sentences against abstracts, outputs a "weakly supported" list (catches wrong-paper citations)
+- 📄 **Change audit**: `insert_refs.py --audit` prints the number diff / citation-point list / stacking warnings / backup & rollback inventory
+- 📑 **Harvard style** + special-character regression tests (Künzler, Dall'Angelo etc. — no more hand-fixing accents/apostrophes)
+- 🧬 **Multi-chapter merge**: new `merge_refs.py` — global renumbering after merge + "old → new number" mapping table
+
+**v1.7.1 (previous)**
 - 🖱️ **One-click batch scripts**: `转占位符草稿.bat` (drag a docx onto it → convert to plain-text draft) and `恢复引用.bat` (drag the AI-edited docx → restore hyperlinks/numbering/bibliography, auto-runs `--mapping` for the check table) — no need to memorize commands
 
 **v1.7.0**
@@ -89,7 +105,7 @@ Supports **journal papers, theses (proposal / mid-term reports), and course pape
 - 🛡️ Fixed: body paragraphs after the reference heading are no longer deleted; clear hint when the document is open in Word; `.docx` only
 - 🧪 New `edge_test.py` boundary regression
 
-> Full version history (v1.0.0 → v1.7.1) in [CHANGELOG.md](CHANGELOG.md).
+> Full version history (v1.0.0 → v1.8.0) in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -137,7 +153,11 @@ python scripts/add_refs.py --refs <project>/引用目录/refs.csv ^
 python scripts/verify_refs.py --refs <project>/引用目录/refs.csv
 ```
 
-Each entry is checked online against authoritative databases (Crossref by DOI, OpenAlex by title): `✅ verified` / `⚠️ mismatch` / `❌ not found` (likely fabricated — remove or fix before writing into your paper) / `🔶 offline`; missing title/authors/year and an empty `note` (the sentence this paper backs) are flagged. `--offline` skips the network, `--report report.md` exports a check report.
+Each entry is checked online against authoritative databases (Crossref by DOI, OpenAlex by title): `✅ verified` / `⚠️ mismatch` / `❌ not found` (likely fabricated — remove or fix before writing into your paper) / `🔶 offline`; missing title/authors/year and an empty `note` (the sentence this paper backs) are flagged. `--offline` skips the network, `--report report.md` exports a check report. Network responses are cached for 7 days (`--refresh-cache` forces a fresh fetch).
+
+**Auto-fill missing DOIs**: `python scripts/fetch_doi.py --refs <project>/引用目录/refs.csv --report report.md` (fallback chain Crossref → PubMed → OpenAlex → publisher page; `--apply` writes back, auto-backup first).
+
+**Content-level support check (no wrong-paper citations)**: `python scripts/verify_support.py --docx <project>/论文/文稿.docx --refs <project>/引用目录/refs.csv` — aligns each citation sentence against the paper's abstract and prints a "weakly supported" list for manual review.
 
 ### 4. Place placeholders in your text and insert citations
 
@@ -155,15 +175,18 @@ python scripts/insert_refs.py --docx <project>/论文/第1章.docx <project>/论
     --refs <project>/引用目录/refs.csv
 ```
 
+**Merging independently numbered chapters**: `python scripts/merge_refs.py --chapters 第1章.docx 第2章.docx --refs <project>/引用目录/refs.csv --out merged.docx` — global renumbering + an "old → new number" mapping table.
+
 **Mapping check**: add `--mapping` to print the "in-text ↔ reference" table (each number → paper, its sentence, `note`) and verify every citation actually backs its sentence:
 
 
 Result:
 
-- In-text markers become clickable superscripts `[1]` (Ctrl+click jumps to the entry in the reference list);
-- A 「参考文献」 heading and list are generated (or reused) at the end of the document;
+- In-text markers become clickable superscripts `[1]` (Ctrl+click jumps to the entry in the reference list); **each number lands right after the sentence it backs** (sentence-level anchors, no end-of-paragraph stacking); numbers misplaced after a period auto-correct;
+- Stacked numbers per sentence (≥3) / paragraph (≥5) are flagged;
+- A 「参考文献」 heading and list are generated (or reused) at the end of the document (TOC regions are skipped);
 - Western journal/book names are automatically italic per GB/T 7714;
-- Delete a citation anywhere and re-run — the rest renumber automatically.
+- Delete a citation anywhere and re-run — the rest renumber automatically; to keep numbers stable after final acceptance, re-run with `--freeze` (keys pinned, incremental only, diff printed); `--audit report.md` exports a change-audit report.
 
 ---
 
@@ -186,7 +209,7 @@ Detailed step-by-step instructions live in [SKILL.md](SKILL.md) (the skill maste
 
 | Item | Default | Flag |
 |---|---|---|
-| Style system | GB/T 7714-2015 | `--style gbt7714\|apa\|vancouver\|mla` |
+| Style system | GB/T 7714-2015 | `--style gbt7714\|apa\|vancouver\|mla\|harvard` |
 | Citation style | numbered, superscript `[1]` | `--citation numbered\|author-year` |
 | Bracket | `[]` | `--bracket ()` |
 | Hanging indent | 2 chars (21pt at 五号) | `--hanging-pt 21` (24 for 小四 / 28 for 四号) |
@@ -204,12 +227,16 @@ Detailed step-by-step instructions live in [SKILL.md](SKILL.md) (the skill maste
 | `new_project.py` | Create project workspace (3 sub-folders outside drive C: + refs.csv template) |
 | `add_refs.py` | Write citations into refs.csv (flags / interactive, validates type, auto-backup) |
 | `rename_papers.py` | Match & rename downloaded PDFs by title, archive them (collision-safe) |
-| `insert_refs.py` | **Core**: placeholders → hyperlink citations; reference list create/update; auto-renumbering; multi-doc chapter numbering with cross-document jumps; Western journal names italic by default; `--mapping` prints the in-text ↔ reference table |
-| `verify_refs.py` | **Citation authenticity check**: Crossref DOI / OpenAlex title lookup — ✅ verified / ⚠️ mismatch / ❌ not found / 🔶 offline; `--offline` field-only; `--report` exports a check report |
-| `format_refs.py` | Render a single entry as gbt7714 / apa / vancouver / mla |
+| `insert_refs.py` | **Core**: placeholders → hyperlink citations; **sentence-level anchors + period correction + stacking warnings**; reference list create/update (last heading, TOC-safe); auto-renumbering; **`--freeze` number pinning + mapping diff**; multi-doc chapter numbering with cross-document jumps; Western journal names italic by default; `--mapping` prints the in-text ↔ reference table; `--audit` change-audit report |
+| `verify_refs.py` | **Citation authenticity check**: Crossref DOI / OpenAlex title lookup — ✅ verified / ⚠️ mismatch / ❌ not found / 🔶 offline; cached via api_client (`--refresh-cache` forces network); `--offline` field-only; `--report` exports a check report |
+| `fetch_doi.py` | **Auto-fill missing DOIs**: fallback chain Crossref → PubMed → OpenAlex → publisher page (`--scrape URL`); suggests only when title+year+first author all match; `--apply` writes back with auto-backup; `--report` exports a lookup report |
+| `verify_support.py` | **Content-level support check (no wrong-paper citations)**: citation sentence ↔ abstract token coverage — strong / weak / no abstract / cross-language; `--report` exports the "weakly supported" list for manual review |
+| `merge_refs.py` | **Multi-chapter merge**: strip per-chapter bibliographies, merge bodies, drop cross-doc jumps, global renumbering, "old → new number" mapping table |
+| `api_client.py` | Shared API client: uniform UA; exponential backoff on 429/5xx; on-disk response cache `scripts/_api_cache/` (7-day TTL) |
+| `format_refs.py` | Render a single entry as gbt7714 / apa / vancouver / mla / harvard |
 | `refs_db.py` | refs.csv read/write library (full GB format incl. `city` field) |
 | `check_websites.py` | Availability check of the 18 literature-search sites (deterministic; `--update` rewrites the list) |
-| `demo/*` | Demo assets & automated tests (`make_demo.py`, `renumber_test.py`, `author_year_test.py`, `edge_test.py`, `multi_doc_test.py`, `verify_docx.py`) |
+| `demo/*` | Demo assets & automated tests (`make_demo.py`, `renumber_test.py`, `author_year_test.py`, `edge_test.py`, `multi_doc_test.py`, `verify_docx.py`, `sentence_level_test.py`, `freeze_test.py`, `toc_test.py`, `merge_test.py`, `special_chars_test.py`) |
 
 ### Search-site list & scheduled checks
 
@@ -235,8 +262,12 @@ direct-citation-assistant/
 │   ├── new_project.py       # create workspace
 │   ├── add_refs.py          # add citations
 │   ├── rename_papers.py     # archive PDFs by title
-│   ├── insert_refs.py       # core: insert citations + reference list + renumbering
-│   ├── format_refs.py       # 4-format rendering
+│   ├── insert_refs.py       # core: insert citations + reference list + renumbering + sentence anchors + freeze
+│   ├── fetch_doi.py         # auto-fill missing DOIs (fallback chain)
+│   ├── verify_support.py    # citation sentence ↔ abstract content check
+│   ├── merge_refs.py        # multi-chapter merge + global renumbering
+│   ├── api_client.py        # shared API client (backoff + cache)
+│   ├── format_refs.py       # 5-format rendering
 │   ├── refs_db.py           # refs.csv I/O
 │   ├── check_websites.py    # site availability checks
 │   └── demo/                # demo document + automated regression tests
@@ -256,7 +287,12 @@ python edge_test.py          # edge cases: Chinese keys / lowercase placeholders
 python multi_doc_test.py     # scenario: multi-chapter docs → continuous numbering + cross-doc jumps
 python verify_refs_test.py   # offline regression: field completeness / --offline / similarity
 python year_suffix_test.py   # scenario: author-year same author & year → auto a/b suffixes
-python verify_docx.py 文稿.docx   # structural integrity (hyperlink ↔ bookmark 1:1)
+python sentence_level_test.py  # scenario: sentence splitting / period correction / stacking warnings
+python freeze_test.py        # scenario: --freeze number pinning + incremental diff + idempotency
+python toc_test.py           # scenario: TOC containing a References row → entries only after the real end heading
+python merge_test.py         # scenario: multi-chapter merge → global renumbering + mapping table
+python special_chars_test.py # regression: Künzler/Dall'Angelo accents & apostrophes through the full pipeline
+python verify_docx.py 文稿.docx   # structural integrity (in-text hyperlinks ↔ bookmarks 1:1)
 ```
 
 > The online authenticity check (Crossref/OpenAlex) needs the network — spot-check it manually: `python ../verify_refs.py --refs refs.csv` — real papers (vaswani2017/devlin2019) should be ✅, the fabricated demo entry (zhang2023) should be ❌ not found.
@@ -270,7 +306,8 @@ python verify_docx.py 文稿.docx   # structural integrity (hyperlink ↔ bookma
 - **`[?]` more than unused entries**: the script errors out — add more references with `add_refs.py` first;
 - **Citing the same paper twice**: use `[CITE:same-key]` the second time; the number is reused; multiple citations at one spot: `[CITE:k1][CITE:k2]`;
 - **Book / thesis / conference**: fill `city` (place of publication / preservation) in refs.csv; `web` entries must fill `url`;
-- **In-text position**: number as superscript, directly after the cited content, **before** the sentence-final punctuation (`…significant progress[1].`), no spaces around it;
+- **In-text position**: number as superscript, directly after the cited content, **before** the sentence-final punctuation (`…significant progress[1].`), no spaces around it; citation points anchor **per sentence** — ≥3 numbers stacked in one sentence triggers a warning (padding should be split onto the sentences each reference actually backs);
+- **Number freezing**: after final acceptance / submission, re-run with `--freeze` so numbers don't shift (keys stay pinned, edits incremental, diff printed); state lives in `<docx dir>/_refs_state/`;
 - **Line spacing**: not mandated by the national standard; follow your school / journal template, select the whole reference list and set it in Word.
 
 ---

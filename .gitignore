@@ -9,6 +9,20 @@ scripts/demo/_backup/
 
 # 测试生成物
 scripts/demo/文稿2.docx
+scripts/demo/文稿.docx
+
+# API 响应缓存（脚本生成，勿入库）
+scripts/_api_cache/
+
+# 编号状态（脚本生成）
+scripts/demo/_refs_state/
+
+# 历史遗留临时测试（Prism 等，非仓库内容）
+_test/
+_test_libs.py
+
+# 版本备份目录（勿入库）
+_backup_skill_*/
 
 # 系统
 Thumbs.db

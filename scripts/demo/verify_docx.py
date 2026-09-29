@@ -42,10 +42,12 @@ for bs in root.iter(w("bookmarkStart")):
     if name.startswith("ref_"):
         print(f"  {name}  (id={bs.get(w('id'))})")
 
-# 验证锚点跳转完整性：每个正文超链接 anchor 都有对应书签
-anchors = [h.get(w("anchor")) for h in body.iter(w("hyperlink"))]
+# 验证锚点跳转完整性：每个正文引用超链接 anchor 都有对应书签。
+# DOI 外部链接（anchor=None，点击跳论文页面）不属于正文引用，不计入比对。
+anchors = [h.get(w("anchor")) for h in body.iter(w("hyperlink"))
+           if h.get(w("anchor")) is not None]
 names = {bs.get(w("name")) for bs in root.iter(w("bookmarkStart"))}
 missing = [a for a in anchors if a not in names]
 print(f"\n===== 完整性 =====")
-print(f"超链接 {len(anchors)} 个 -> 书签 {len(names)} 个；无对应书签的：{missing or '无'}")
+print(f"正文引用超链接 {len(anchors)} 个 -> 书签 {len(names)} 个；无对应书签的：{missing or '无'}")
 print("OK" if not missing else "FAIL")

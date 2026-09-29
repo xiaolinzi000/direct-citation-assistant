@@ -2,7 +2,53 @@
 
 本项目所有重要变更记录于此。版本线按功能里程碑划分，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [v1.7.1] - 2026-09-10（当前版本）
+## [v1.8.0] - 2026-09-29
+
+### 新增（按用户实测反馈的 8 项改进）
+
+**1. 句级落点（最高优先级）：引用从"段末堆叠"改为"逐句紧跟"**
+- `insert_refs.py` 新增 `split_sentences` 句级切分器（中文/英文句末标点切分，保守规避：小数点/版本号、常见缩写点 e.g./et al./fig.、连续点省略号、切分点后闭合引号归前句）
+- 引用点提取按句切分，每个编号紧跟其支撑的那句话；无法确定对应关系时宁可不放、不放段末打包
+- **句内落点校正**：占位符若误放在句号后（「句子。[CITE]」），自动把句末标点剥离到编号之后——编号紧跟引文、置于句末标点之前（「句子[1]。」）
+- **堆叠告警**：插入后自动扫描单句（默认 ≥3 个）与单段（默认 ≥5 个）堆叠编号并提示拆分；`--stack-sentence N` / `--stack-paragraph N` 调阈值、`--no-stack-warning` 关闭
+- `--mapping` 输出升级为句级定位（段号+句号）
+
+**2. 编号冻结 + 增量更新（key 恒定，如 collet2020 恒为 1）**
+- 新增 `--freeze`：编号以 refs.csv 的 key 为准，已冻结 key 恒为原编号；新 key 复用"正文实际占用之外"的最小编号；已从正文消失的旧 key 编号自动释放
+- 编号状态落盘 `<主文档同目录>/_refs_state/<主文档名>.json`，每次运行自动输出**新旧编号映射 diff**（新增/移除/变化/不变），验收有据
+- `--no-reuse-gaps` 关闭空号复用（编号只增不减）；`--no-state` / `--state <路径>` 控制状态文件
+
+**3. 文末定位修复（TOC 误插坑）**
+- 定位改为取**最后一个** References/参考文献 标题；自动检测并跳过 TOC 区域（fldSimple TOC、instrText=TOC 覆盖的全部目录内容行）
+- to_placeholders 模式与多文档合并同样过滤 TOC
+
+**4. DOI 缺失与限流回退链**
+- 新增 `scripts/api_client.py` 公共模块：429/500/502/503/504 指数退避重试（1.5×2ⁿ+抖动、上限 20s）；API 响应落盘缓存 `scripts/_api_cache/`（默认 7 天 TTL、sha1 键名）
+- 新增 `scripts/fetch_doi.py`：回退链 **Crossref → PubMed E-utilities → OpenAlex → 出版页抓取**（`--scrape URL`），仅"题名+年份+首作者"全吻合才建议 DOI；`--apply` 写回前自动备份 refs.csv；`--report` 导出补查报告
+- `verify_refs.py` 联网走 api_client，新增 `--refresh-cache` 绕缓存强制联网
+
+**5. 内容级核验（防张冠李戴）**
+- 新增 `scripts/verify_support.py`：从 docx 提取引用句（复用句级切分器）→ 拉文献摘要（Crossref JATS → OpenAlex abstract_inverted_index）→ token 覆盖率判定 ✅强支持（≥0.25）/ ⚠️弱支持 / 🔶无摘要
+- 输出"弱支持引用"清单，人工复核有据可查；`--min-coverage` 调阈值、`--report` 导出 Markdown
+- **跨语言检测**：中文引用句对英文摘要等自动标注「🌐 跨语言（人工核对）」，不误报弱支持
+
+**6. 变更审计报告**
+- `insert_refs.py --audit <路径>.md` 输出 5 节：编号映射 diff / 句级引用点清单 / 堆叠告警 / 文末条目 / 备份与回滚清单，配合自动备份一键回滚
+
+**7. 样式扩展与特殊字符回归**
+- `format_refs.py` 新增 **Harvard（作者-年份制）** 输出（期刊/专著/学位论文/网页分支，西文刊名斜体）
+- 新增 `demo/special_chars_test.py`：Künzler、Dall'Angelo、O'Connor、Müller、für 等重音/撇号贯穿 format→insert 全链路 + XML 回读断言，特殊字符转义固化为回归测试
+
+**8. 多章节合并编号**
+- 新增 `scripts/merge_refs.py`：读入各章 → 移除各自文末表（复用 TOC 过滤）→ 合并正文 → 移除跨文档 r:id → 书签 ID 全局重排 → **全局重编号** → 文末一份表 → 输出「章节旧编号→全局新编号」映射表；备份 + 回读
+
+### 测试与工程
+- 新增 5 个回归测试（全部通过）：`sentence_level_test.py`（切分器 6 组断言+落点校正+堆叠告警）、`freeze_test.py`（冻结+幂等）、`toc_test.py`、`merge_test.py`、`special_chars_test.py`；新增 `demo/_test_util.py` 最小 docx 构造工具（手写 XML，不走 python-docx）
+- 修复既有误报：`verify_docx.py` 过滤 anchor=None 的 DOI 外部链接后再比对书签
+- **联网实测（2026-09-29）**：verify_refs 三条判定符合预期（devlin2019 ✅ Crossref、vaswani2017 ✅ OpenAlex 兜底、虚构 zhang2023 ❌）；verify_support 成功拉取 OpenAlex 摘要并正确标注跨语言；fetch_doi 对 BERT 命中 Crossref DOI（10.18653/v1/N19-1423），Attention 2017（10.5555 前缀 ACM 早期 DOI、未在 Crossref 注册）正确判未命中
+- 全部旧测试保持全绿：verify_refs_test（14 项）/ renumber_test / author_year_test / year_suffix_test / edge_test / multi_doc_test
+
+
 
 ### 新增：一键批处理（无需记命令）
 - **`转占位符草稿.bat`**：把 Word 文档拖到文件上（或双击后输入路径）→ 自动跑 `insert_refs.py --to-placeholders`，生成"纯文本草稿"交给 AI/他人修改
@@ -144,4 +190,4 @@
 - 其余 14 项优化：无 Hyperlink 样式时补蓝色下划线 fallback、`--refs` 缺失时工作区路径提示、备份保留 30 份、MLA DOI 补 `https://doi.org/` 前缀、307/308 重定向计可达、标题宽容匹配避免重复建标题、类型校验、路径动态化、中文作者拼音排序、GB 混排截断符号语种判断、PDF 重名加序号、回读验证同步、死代码清理、author-year 自动化回归
 
 ---
-*版本号说明：本仓库已随以上变更发布至 v1.7.1；后续变更将持续在此文件记录。*
+*版本号说明：本仓库已随以上变更发布至 v1.8.0；后续变更将持续在此文件记录。*

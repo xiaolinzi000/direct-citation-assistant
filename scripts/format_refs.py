@@ -7,9 +7,10 @@ format_refs.py — 引用条目格式化（论文引用 skill）
   apa       APA 第 7 版
   vancouver Vancouver / ICMJE 编号式（多数生物医学期刊）
   mla       MLA 第 9 版
+  harvard   Harvard 作者-年份制（Cite Them Right 风格，英国体系常用）
 
 用法（脚本内调用）：
-    from format_refs import format_ref, gbt7714, apa, vancouver, mla
+    from format_refs import format_ref, gbt7714, apa, vancouver, mla, harvard
     text = format_ref(ref_dict, style="gbt7714")
 """
 
@@ -135,11 +136,29 @@ def _apa_single(a):
 
 # ---------- Vancouver ----------
 
+def _icmje_single(a):
+    """ICMJE/Vancouver 单作者：'Landeta, C.' -> 'Landeta C'；
+    'Collet, J.-F.' -> 'Collet JF'（姓保留原大小写，首字母连写、不带句点）。"""
+    a = a.strip()
+    if _is_cjk(a):
+        return a
+    if "," in a:
+        surname, given = a.split(",", 1)
+        initials = "".join(re.findall(r"[A-Z]", given.upper()))
+        return f"{surname.strip()} {initials}".strip()
+    words = a.split()
+    if len(words) == 1:
+        return words[0]
+    surname = words[-1]
+    initials = "".join(w[0].upper() for w in words[:-1])
+    return f"{surname} {initials}".strip()
+
+
 def _van_authors(raw, max_a=6):
     lst = _split_authors(raw)
     if not lst:
         return ""
-    head = [_gb_single(a) for a in lst[:max_a]]
+    head = [_icmje_single(a) for a in lst[:max_a]]
     if len(lst) > max_a:
         head.append("et al.")
     return ", ".join(head)
@@ -286,7 +305,7 @@ def vancouver(r):
     if authors:
         seg.append(authors.rstrip(".") + ".")
     if title:
-        seg.append(f"{title}.")
+        seg.append(title if title.endswith(".") else f"{title}.")
     if src_it:
         seg.append(f"{src_it}.")
     tail = f"{year}"
@@ -323,7 +342,84 @@ def mla(r):
     return " ".join(x for x in seg if x)
 
 
-FORMATS = {"gbt7714": gbt7714, "apa": apa, "vancouver": vancouver, "mla": mla}
+# ---------- Harvard（作者-年份制，Cite Them Right）----------
+
+def _harvard_single(a):
+    """Harvard 单作者：'Smith, J.' 原样；'J. Smith' -> 'Smith, J.'；中文原样"""
+    a = a.strip()
+    if _is_cjk(a):
+        return a
+    if "," in a:
+        return a
+    words = a.split()
+    if len(words) <= 1:
+        return a
+    return f"{words[-1]}, {''.join(w[0].upper() + '.' for w in words[:-1])}"
+
+
+def _harvard_authors(raw):
+    """Harvard 全部作者列出：A, B and C（末位 and）。"""
+    lst = [_harvard_single(a) for a in _split_authors(raw)]
+    if not lst:
+        return ""
+    if len(lst) == 1:
+        return lst[0]
+    return ", ".join(lst[:-1]) + " and " + lst[-1]
+
+
+def harvard(r):
+    """Harvard（作者-年份制）。
+    期刊：Surname, I. (Year) 'Title', Journal, Vol(Issue), pp. pages. doi/URL.
+    专著：Surname, I. (Year) Title. City: Publisher.
+    网页：Surname, I. (Year) Title. Available at: URL (Accessed: 日期).
+    学位论文：Surname, I. (Year) Title. PhD thesis. City: 机构. """
+    authors = _harvard_authors(r.get("authors", ""))
+    title = r.get("title", "").strip()
+    year = r.get("year", "").strip()
+    src = r.get("source", "").strip()
+    vol = r.get("volume", "").strip()
+    iss = r.get("issue", "").strip()
+    pages = r.get("pages", "").strip()
+    doi = r.get("doi", "").strip()
+    city = r.get("city", "").strip()
+    url = r.get("url", "").strip()
+    ttype = r.get("type", "journal")
+    head = f"{authors} ({year}). {title}." if authors else f"({year}). {title}."
+    if ttype == "book":
+        base = f"{head} *{src}*." if src else f"{head}."
+        if city:
+            base = f"{head} *{src}*. {city}." if src else f"{head} {city}."
+        return base
+    if ttype == "thesis":
+        return f"{head} PhD thesis. {city + '. ' if city else ''}{src}."
+    if ttype == "web":
+        base = f"{head}"
+        if url:
+            today = datetime.now().strftime("%Y-%m-%d")
+            base += f" Available at: {url} (Accessed: {today})."
+        elif src:
+            base += f" {src}."
+        return base
+    # 期刊/会议
+    base = f"{head} *{src}*," if src else f"{head}"
+    tail = f" {year}"
+    if vol:
+        tail += f", {vol}"
+        if iss:
+            tail += f"({iss})"
+        if pages:
+            tail += f", pp. {pages}"
+    base += tail + "."
+    if doi:
+        base += f" doi: {doi}."
+    elif url:
+        today = datetime.now().strftime("%Y-%m-%d")
+        base += f" Available at: {url} (Accessed: {today})."
+    return base
+
+
+FORMATS = {"gbt7714": gbt7714, "apa": apa, "vancouver": vancouver,
+           "mla": mla, "harvard": harvard}
 
 
 def format_ref(r, style="gbt7714"):

@@ -15,30 +15,32 @@ verify_refs.py — 引用真实性与字段完整性校验（论文引用 skill�
      ❌ 未找到       数据库查不到 → 极可能是编造或信息严重有误，必须人工核对
      🔶 无法联网     API 不可达（不判假，标注待人工核）
 
+联网行为（v1.8 改进）：
+  - 统一走 api_client：429/5xx 指数退避重试（带抖动），不再反复把额度打爆；
+  - 响应落盘缓存到 scripts/_api_cache/（默认 7 天）：同一批文献重跑校验
+    命中缓存，几乎不再消耗 API 额度。
+
 用法：
   python verify_refs.py --refs refs.csv                # 完整校验（联网）
   python verify_refs.py --refs refs.csv --offline      # 仅字段完整性（不联网）
   python verify_refs.py --refs refs.csv --report 核对报告.md   # 同时导出 Markdown 报告
+  python verify_refs.py --refs refs.csv --refresh-cache         # 忽略缓存强制实时校验
 """
 
 import argparse
 import io
-import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from difflib import SequenceMatcher
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from refs_db import load_refs
+from api_client import fetch_json
 
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 "
-      "direct-citation-assistant/1.4")
+UA = None  # UA 统一由 api_client 管理
 
 
 def norm(s):
@@ -49,29 +51,14 @@ def ratio(a, b):
     return SequenceMatcher(None, norm(a), norm(b)).ratio()
 
 
-def http_json(url, timeout=20, retries=2):
-    """GET JSON，429/5xx 时等待后重试（OpenAlex/Crossref 对高频请求限流）。"""
-    import time
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": UA, "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
-                time.sleep(1.2 * (attempt + 1))
-                continue
-            raise
-    raise RuntimeError("unreachable")
-
-
-def check_crossref(doi):
+def check_crossref(doi, use_cache=True):
     """按 DOI 查 Crossref。
     返回 (found, title, year, container, volume, issue, page, error)。"""
     try:
-        data = http_json(
-            "https://api.crossref.org/works/" + urllib.parse.quote(doi))
+        url = ("https://api.crossref.org/works/"
+               + urllib.parse.quote(doi))
+        data = fetch_json(url, cache_key="crossref:" + doi,
+                          use_cache=use_cache)
         msg = data.get("message", {})
         title = (msg.get("title") or [""])[0]
         year = ""
@@ -85,29 +72,32 @@ def check_crossref(doi):
         issue = str(msg.get("issue") or "")
         page = str(msg.get("page") or "")
         return True, title, year, container, volume, issue, page, None
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+    except RuntimeError as e:
+        if "HTTP 404" in str(e):
             return False, "", "", "", "", "", "", None
-        return False, "", "", "", "", "", "", f"HTTP {e.code}"
+        return False, "", "", "", "", "", "", str(e)
     except Exception as e:
         return False, "", "", "", "", "", "", f"{type(e).__name__}: {e}"
 
 
-def search_openalex(title):
+def search_openalex(title, use_cache=True):
     """按题名搜 OpenAlex。返回 (found, match_title, year, error)。"""
-    import time
     try:
-        time.sleep(0.3)  # 对 OpenAlex 保持礼貌间隔，降低 429 概率
+        import time
+        time.sleep(0.2)  # 对 OpenAlex 保持礼貌间隔，降低 429 概率（缓存命中时仅首次生效）
         url = ("https://api.openalex.org/works?search="
                + urllib.parse.quote(title)
                + "&per-page=1&select=title,publication_year,biblio")
-        data = http_json(url)
+        data = fetch_json(url, cache_key="openalex:" + title,
+                          use_cache=use_cache)
         res = data.get("results") or []
         if not res:
             return False, "", "", None
         t = res[0].get("title") or ""
         y = str(res[0].get("publication_year") or "")
         return True, t, y, None
+    except RuntimeError as e:
+        return False, "", "", str(e)
     except Exception as e:
         return False, "", "", f"{type(e).__name__}: {e}"
 
@@ -117,7 +107,7 @@ def _norm_num(s):
     return (s or "").strip().replace("–", "-").replace(" ", "").rstrip(".,;：:。，；")
 
 
-def verify(ref, offline):
+def verify(ref, offline, use_cache=True):
     """校验单条引用，返回 (status, detail, field_issues)。"""
     title = (ref.get("title") or "").strip()
     issues = []
@@ -139,7 +129,7 @@ def verify(ref, offline):
     doi = (ref.get("doi") or "").strip()
     if doi:
         found, c_title, c_year, c_src, c_vol, c_iss, c_page, err = \
-            check_crossref(doi)
+            check_crossref(doi, use_cache)
         if err:
             return "🔶 无法联网", f"Crossref: {err}", issues
         if found:
@@ -159,7 +149,7 @@ def verify(ref, offline):
         # DOI 404 → OpenAlex 按题名兜底（只核对题名：OpenAlex 搜索结果可能
         # 匹配到不同版本/预印本，年份核对会误报，如 Attention Is All You Need
         # 命中 2025 重印版；年份核对仅在 Crossref DOI 精确命中时进行）
-        f2, o_title, o_year, err2 = search_openalex(title)
+        f2, o_title, o_year, err2 = search_openalex(title, use_cache)
         if err2:
             return "🔶 无法联网", f"DOI 404 且 OpenAlex: {err2}", issues
         if f2 and ratio(o_title, title) >= 0.6:
@@ -168,7 +158,7 @@ def verify(ref, offline):
         return "❌ 未找到", \
             f"DOI 查不到且题名也搜不到（{title[:35]}）——可能是编造或信息有误", issues
     # 无 DOI → OpenAlex 题名搜索（同上：只核对题名，不核对年份）
-    f, o_title, o_year, err = search_openalex(title)
+    f, o_title, o_year, err = search_openalex(title, use_cache)
     if err:
         return "🔶 无法联网", f"OpenAlex: {err}", issues
     if f and ratio(o_title, title) >= 0.6:
@@ -184,6 +174,8 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true",
                     help="仅检查字段完整性，不做联网真实性校验")
     ap.add_argument("--report", default="", help="导出核对报告到 Markdown 文件")
+    ap.add_argument("--refresh-cache", action="store_true",
+                    help="忽略 scripts/_api_cache/ 缓存，强制实时联网校验（默认命中 7 天内缓存）")
     args = ap.parse_args(argv)
 
     refs = load_refs(args.refs)
@@ -193,7 +185,8 @@ def main(argv=None):
 
     rows = []
     for i, r in enumerate(refs, 1):
-        status, detail, issues = verify(r, args.offline)
+        status, detail, issues = verify(r, args.offline,
+                                        use_cache=not args.refresh_cache)
         rows.append((i, r, status, detail, issues))
         mark = "⚠" if status.startswith(("⚠", "❌")) else " "
         flag = " ".join(issues)

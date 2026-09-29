@@ -7,9 +7,22 @@ insert_refs.py — 在 Word 文档中插入/更新带超链接的论文引用（
      点击编号即可跳转到文末对应文献条目（Word 中默认 Ctrl+点击，可在
      文件→选项→高级→「用 Ctrl+单击跟踪超链接」取消勾选后改为单击跳转）。
   2. 文末自动生成参考文献目录：在已有的 References/参考文献 标题后生成；
-     没有该标题则自动创建。
+     没有该标题则自动创建。定位改进：取「最后一个」匹配标题，自动跳过
+     TOC（目录）区域/样式，避免把条目误插进目录。
   3. 自动重编号：删除中间某处引用后重跑本脚本，其余编号自动连续更新；
      同一篇论文多次引用只占一个编号（文末只列一次）。
+
+v1.8 新增（句级落点 + 严格引用，默认行为）：
+  4. 句级切分：脚本按句切分段落并定位每个引用点所在句子；
+     占位符若误放在句号之后，自动归位到句末标点之前（编号紧跟引文）。
+  5. 堆叠告警：插入后自动扫描「单句/单段堆叠编号」（默认阈值 单句 3、
+     单段 5），提醒把编号拆分到各自支撑的句子，不在段末打包。
+  6. 编号状态与增量更新：运行状态（key→编号）落盘到
+     <主文档同目录>/_refs_state/，每次运行输出与上次的「编号映射 diff」
+     （新增/移除/编号变化）；--freeze 锁定编号（key 恒为原编号，
+     只做增量增删），重排不再是每次全量重编号。
+  7. 变更审计报告：--audit <路径>.md 输出新增/移除/移位引用句、
+     编号映射与堆叠告警，配合 _backup/ 一键回滚。
 
 引用点（正文中）：
   [?]            —— 按出现顺序自动取 refs.csv 中尚未被引用的下一条
@@ -23,8 +36,10 @@ insert_refs.py — 在 Word 文档中插入/更新带超链接的论文引用（
   python insert_refs.py --docx 第1章.docx 第2章.docx --main 第2章.docx
                                  # 指定主文档（参考文献表所在，默认最后一个）
   python insert_refs.py --docx 文稿.docx --dry-run      # 只打印计划不写文件
+  python insert_refs.py --docx 文稿.docx --freeze       # 冻结编号：key 恒为原编号
+  python insert_refs.py --docx 文稿.docx --audit 变更.md  # 输出变更审计报告
   常用参数：
-    --style gbt7714|apa|vancouver|mla   参考文献格式（默认 gbt7714）
+    --style gbt7714|apa|vancouver|mla|harvard   参考文献格式（默认 gbt7714）
     --citation numbered|author-year     编号制（默认，正文 [1] 上标）/
                                        作者-年份制（正文 (Smith et al., 2023)）
     --heading 参考文献                   自定义标题文本（找不到时创建）
@@ -41,11 +56,20 @@ insert_refs.py — 在 Word 文档中插入/更新带超链接的论文引用（
     --main 路径                         多文档时指定主文档（默认最后一个 --docx）
     --backup-dir 路径                    备份目录（默认 docx 同目录 _backup）
     --dry-run                           只打印计划不写文件
+    --freeze                            冻结编号（key 恒为原编号，仅增量增删）
+    --no-reuse-gaps                     freeze 下新 key 不复用空号（用最大号+1）
+    --stack-sentence N                  单句堆叠告警阈值（默认 3）
+    --stack-paragraph N                 单段堆叠告警阈值（默认 5）
+    --no-stack-warning                  关闭堆叠告警
+    --audit 路径                         输出变更审计报告（Markdown）
+    --no-state                          不读写编号状态（无 diff/无 freeze）
+    --state 路径                         自定义状态文件路径
 """
 
 import argparse
 import copy
 import io
+import json
 import os
 import re
 import shutil
@@ -180,6 +204,332 @@ def is_ref_hyperlink(el):
     return bool(OLD_REF_RE.match(txt.strip()))
 
 
+# ---------- 句级切分（v1.8：句级落点 + 堆叠统计）----------
+
+# 常见缩写点（"." 前是该词时不当作句末标点）
+_ABBREV = {"e.g", "i.g", "i.e", "et", "al", "dr", "mr", "mrs", "ms", "vs",
+           "fig", "figs", "eq", "eqs", "no", "vol", "pp", "ca", "approx",
+           "inc", "ltd", "co", "dept", "univ", "st", "ave", "jr", "sr",
+           "esp", "cf", "ibid", "eds", "ed", "trans", "p", "pp", "sec",
+           "ch", "chap", "ref", "refs"}
+# 句末标点
+_SENT_END = ".。！？!?"
+# 切分点后紧跟并归入前一句的闭合符号
+_CLOSERS = "）】」』”’>)]}\u300b\u3009\uff62"
+
+
+def split_sentences(text):
+    """把文本按句末标点切分为 [(start, end, sentence_text)]。
+
+    规则（保守，避免误切）：
+      - 小数点 / 版本号（数字.数字）不切；
+      - 常见缩写点（e.g.、et al.、fig. 等）不切；
+      - 省略号（连续 3+ 个点）不切；
+      - 切分点后紧跟的闭合引号/括号归入前一句。
+    返回值用于：定位引用点所在句、单句/单段堆叠统计、句级映射报告。
+    """
+    sents = []
+    n = len(text)
+    start = 0
+    i = 0
+    while i < n:
+        c = text[i]
+        if c not in _SENT_END:
+            i += 1
+            continue
+        if c == ".":
+            prev = text[i - 1] if i > 0 else ""
+            nxt = text[i + 1] if i + 1 < n else ""
+            if prev.isdigit() and nxt.isdigit():
+                i += 1
+                continue  # 小数点/版本号
+            if i + 1 < n and text[i + 1] == ".":
+                j = i
+                while j < n and text[j] == ".":
+                    j += 1
+                i = j
+                continue  # 省略号（连续点）
+            # 缩写检查：向前取连续词（允许词内含点，如 e.g.）
+            tok_start = i
+            while (tok_start > 0 and
+                   (text[tok_start - 1].isalnum() or
+                    text[tok_start - 1] in "-'.")):
+                tok_start -= 1
+            tok = text[tok_start:i].lower()
+            if tok in _ABBREV:
+                i += 1
+                continue
+        # 切分点后紧跟闭合符号则并入前一句
+        j = i + 1
+        while j < n and text[j] in _CLOSERS:
+            j += 1
+        sents.append((start, j, text[start:j].strip()))
+        i = j
+        start = j
+    if start < n:
+        sents.append((start, n, text[start:n].strip()))
+    return sents
+
+
+def locate_sentence(sents, offset):
+    """返回 offset 所在句的 (句索引, 句子文本)；找不到返回 (None, "")。"""
+    for idx, (s, e, txt) in enumerate(sents):
+        if s <= offset < e:
+            return idx, txt
+    return None, ""
+
+
+def _snap_anchor_before_punct(anchor):
+    """句内落点校正：占位符若误放在句末标点之后（如「句子。[CITE]」），
+    把句末标点剥离到占位符之后——编号紧跟引文、置于句末标点之前（规范）。
+
+    规则（保守）：
+      - 跳过 _strip_placeholder 留下的空 run 找前一个有文字的 run；
+      - 仅当该 run 以句末标点结尾且与锚点之间无其他文字时调整；
+      - 调整方式：标点从原 run 剥离，新建同格式 run 放在锚点之后。"""
+    prev = anchor.getprevious()
+    while prev is not None and run_text(prev) == "":
+        prev = prev.getprevious()
+    if prev is None:
+        return
+    t = run_text(prev)
+    if not t or t[-1] not in _SENT_END:
+        return
+    # 检查 prev 与锚点之间只允许空 run（不允许其他文字）
+    cur = prev
+    while cur is not None and cur.getnext() is not anchor:
+        cur = cur.getnext()
+        if cur is None:
+            return
+        if run_text(cur) != "":
+            return
+    # 剥离尾标点：prev 去掉标点，标点作为新 run 放到锚点之后
+    head, tail = t[:-1], t[-1]
+    if head:
+        _set_run_text(prev, head)
+    else:
+        _set_run_text(prev, "")
+    p = anchor.getparent()
+    punct_run = etree.Element(w("r"))
+    rpr = prev.find(w("rPr"))
+    if rpr is not None:
+        punct_run.append(copy.deepcopy(rpr))
+    tt = etree.SubElement(punct_run, w("t"))
+    tt.text = tail
+    anchor.addnext(punct_run)
+
+
+def _ref_marks_in_para(p):
+    """段内引用标记列表 [(offset, label)]：脚本生成的引用超链接文本
+    （[n] / (Author, 2023)）与残留占位符（[CITE:key] / [?]）。"""
+    marks = []
+    acc = 0
+    for child in p:
+        if child.tag == w("hyperlink"):
+            if is_ref_hyperlink(child):
+                txt = "".join(run_text(r) for r in child.findall(w("r")))
+                marks.append((acc, txt))
+                acc += len(txt)
+        elif child.tag == w("r"):
+            txt = run_text(child)
+            m = CITE_RE.search(txt) or ANY_RE.search(txt)
+            if m:
+                marks.append((acc + m.start(), m.group(0)))
+            acc += len(txt)
+    return marks
+
+
+def ref_offset_in_para(p, key):
+    """返回 key 对应引用标记在段文本中的字符偏移；找不到返回 None。"""
+    acc = 0
+    for child in p:
+        if child.tag == w("hyperlink"):
+            anchor = child.get(w("anchor")) or ""
+            txt = "".join(run_text(r) for r in child.findall(w("r")))
+            if anchor == f"ref_{key}":
+                return acc
+            acc += len(txt)
+        elif child.tag == w("r"):
+            txt = run_text(child)
+            m = CITE_RE.search(txt)
+            kk = m.group(1) if m else None
+            if kk and kk.lower() == key.lower():
+                return acc + m.start()
+            acc += len(txt)
+    return None
+
+
+def scan_stacking(body, sent_th=3, para_th=5, citation_mode="numbered"):
+    """扫描单句/单段堆叠编号，返回告警列表：
+    [(段号, 类型('句'/'段'), 数量, 阈值, 编号列表, 文本片段)]"""
+    warnings = []
+    p_idx = 0
+    for p in body.iter(w("p")):
+        p_idx += 1
+        full = para_text(p)
+        if not full.strip():
+            continue
+        marks = _ref_marks_in_para(p)
+        if not marks:
+            continue
+        labels = [lab for _, lab in marks]
+        nums = []
+        for lab in labels:
+            m = re.search(r"\[(\d+)\]", lab)
+            if m:
+                nums.append(int(m.group(1)))
+        if citation_mode == "numbered":
+            total = len(nums)
+            if total >= para_th:
+                warnings.append((p_idx, "段", total, para_th, nums, full[:80]))
+            sents = split_sentences(full)
+            for sidx, (s, e, _t) in enumerate(sents):
+                sn = [nm for nm, (so, _l) in zip(nums, marks)
+                      if s <= so < e]
+                if len(sn) >= sent_th:
+                    warnings.append((p_idx, f"句{sidx + 1}", len(sn), sent_th,
+                                     sn, full[s:e][:80]))
+        else:
+            # author-year：按引用标记数量统计
+            if len(marks) >= para_th:
+                warnings.append((p_idx, "段", len(marks), para_th,
+                                 labels, full[:80]))
+    return warnings
+
+
+# ---------- TOC 区域检测（v1.8：避免把条目误插进目录）----------
+
+def _para_has_toc_field(p):
+    """段落含 TOC 域（fldSimple instr=TOC 或 instrText 含 TOC）。"""
+    for it in p.iter(w("instrText")):
+        if "TOC" in (it.text or "").upper():
+            return True
+    for fs in p.iter(w("fldSimple")):
+        if "TOC" in (fs.get(w("instr")) or "").upper():
+            return True
+    return False
+
+
+def _para_style_name(p, styles_root):
+    """段落样式名（pStyle val -> style name）；无样式返回 ''。"""
+    if styles_root is None:
+        return ""
+    ppr = p.find(w("pPr"))
+    if ppr is None:
+        return ""
+    ps = ppr.find(w("pStyle"))
+    if ps is None:
+        return ""
+    val = ps.get(w("val")) or ""
+    if not val:
+        return ""
+    for s in styles_root.findall(w("style")):
+        if s.get(w("styleId")) == val:
+            nm = s.find(w("name"))
+            if nm is not None and nm.get(w("val")):
+                return nm.get(w("val"))
+            break
+    return val
+
+
+def _para_in_toc_region(p, styles_root):
+    """判断段落是否位于目录（TOC）区域：
+    (a) 自身含 TOC 域；(b) 位于 fldSimple TOC 之内；(c) 样式名含 toc。"""
+    cur = p
+    while cur is not None:
+        if cur.tag == w("fldSimple"):
+            if "TOC" in (cur.get(w("instr")) or "").upper():
+                return True
+        cur = cur.getparent()
+    if _para_has_toc_field(p):
+        return True
+    style = _para_style_name(p, styles_root)
+    if style and "toc" in style.lower():
+        return True
+    return False
+
+
+def toc_domain_set(body):
+    """返回位于 TOC 复杂域（fldChar begin instrText=TOC … end）之间的段落集合。
+    覆盖目录内容段（separate 与 end 之间的超链接行），修复
+    「带目录文档把条目误插进 TOC」的踩坑场景。"""
+    inside = False
+    dom = set()
+    for p in body.iter(w("p")):
+        instr = [(it.text or "") for it in p.iter(w("instrText"))]
+        has_toc_instr = any("TOC" in t.upper() for t in instr)
+        flds = list(p.iter(w("fldChar")))
+        has_begin = any(f.get(w("fldCharType")) == "begin" for f in flds)
+        has_end = any(f.get(w("fldCharType")) == "end" for f in flds)
+        if inside:
+            dom.add(p)
+        if has_begin and has_toc_instr:
+            inside = True
+        if has_end:
+            inside = False
+    return dom
+
+
+def make_toc_filter(body, styles_root):
+    """返回 TOC 区域判定函数 is_toc(p)（域内容段 + fldSimple + 样式名）。"""
+    dom = toc_domain_set(body)
+
+    def is_toc(p):
+        if p in dom:
+            return True
+        return _para_in_toc_region(p, styles_root)
+    return is_toc
+
+
+# ---------- 编号状态（v1.8：diff / freeze）----------
+
+STATE_DIR_NAME = "_refs_state"
+STATE_VERSION = 2
+
+
+def state_path(main_path, state_override=None):
+    if state_override:
+        return state_override
+    d = os.path.join(os.path.dirname(os.path.abspath(main_path)), STATE_DIR_NAME)
+    return os.path.join(d, os.path.splitext(os.path.basename(main_path))[0] + ".json")
+
+
+def load_state(path):
+    """读取状态文件。返回 (key_num dict, key_order list)；不存在/损坏返回 (None, None)。"""
+    try:
+        with io.open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d.get("key_num") or {}, d.get("key_order") or []
+    except Exception:
+        return None, None
+
+
+def save_state(path, key_num, key_order):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    data = {"version": STATE_VERSION,
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "key_num": key_num, "key_order": key_order}
+    tmp = path + ".tmp"
+    with io.open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+
+
+def diff_key_nums(old_map, new_map):
+    """比较新旧编号映射，返回 (added, removed, changed, stable)：
+      added   [(key, None, 新号)]         —— 本次新增引用
+      removed [(key, 旧号, None)]         —— 本次移除引用
+      changed [(key, 旧号, 新号)]         —— 编号发生变化（移位）
+      stable  [key]                       —— 编号不变"""
+    old, new = old_map or {}, new_map or {}
+    added = [(k, None, new[k]) for k in new if k not in old]
+    removed = [(k, old[k], None) for k in old if k not in new]
+    changed = [(k, old[k], new[k]) for k in old
+               if k in new and old[k] != new[k]]
+    stable = [k for k in old if k in new and old[k] == new[k]]
+    return added, removed, changed, stable
+
+
 # ---------- 正文引用点收集 ----------
 
 def collect_points(body):
@@ -267,13 +617,40 @@ def _strip_placeholder(p, start, end):
 
 # ---------- 编号分配 ----------
 
-def assign_numbers(points, refs):
-    """给引用点分配编号：key 首次出现定号，重复引用同一 key 复用编号；
-       'any' 占位符依次取未引用的条目（按 refs.csv 顺序）。
-       返回 (points, key_to_num, used_keys 顺序列表) 或抛错。"""
+def assign_numbers(points, refs, freeze_key_num=None, reuse_gaps=True):
+    """给引用点分配编号。
+
+    非冻结（默认）：key 首次出现定号，重复引用同一 key 复用编号；
+      'any' 占位符依次取未引用的条目（按 refs.csv 顺序）。
+    冻结（--freeze，freeze_key_num 非空）：已冻结 key 恒为原编号；
+      新出现的 key 分配「当前未占用的最小编号」（--no-reuse-gaps 时取最大号+1）；
+      从正文消失的 key 编号释放（下次冻结可复用）。
+    返回 (points, key_to_num, used_keys 顺序列表) 或抛错。"""
     key_to_num = {}
     used_keys = []
     any_pool = [r["key"] for r in refs]
+    if freeze_key_num is None:
+        for pt in points:
+            key = pt["key"]
+            if pt["kind"] == "any":
+                cands = [k for k in any_pool if k not in used_keys]
+                if not cands:
+                    raise RuntimeError("正文 [?] 数量多于 refs.csv 中未引用的条目，"
+                                       "请先 add_refs.py 补充文献。")
+                key = cands[0]
+                pt["key"] = key
+            if key not in key_to_num:
+                key_to_num[key] = len(key_to_num) + 1
+                used_keys.append(key)
+            pt["num"] = key_to_num[key]
+        return points, key_to_num, used_keys
+    # 冻结分支：已冻结 key 恒为原编号；新 key 分配「当前未被正文占用的
+    # 最小编号」（--no-reuse-gaps 时取最大号+1）。已从正文消失的旧 key
+    # 编号随之释放（不再占用空号）。
+    freeze_key_num = freeze_key_num or {}
+    maxn = max(freeze_key_num.values()) if freeze_key_num else 0
+    # 第一遍：确定每个 point 的 key（[?] 自动分配），并收集正文实际占用的冻结号
+    occupied = set()
     for pt in points:
         key = pt["key"]
         if pt["kind"] == "any":
@@ -283,9 +660,25 @@ def assign_numbers(points, refs):
                                    "请先 add_refs.py 补充文献。")
             key = cands[0]
             pt["key"] = key
-        if key not in key_to_num:
-            key_to_num[key] = len(key_to_num) + 1
+        if key in freeze_key_num:
+            occupied.add(freeze_key_num[key])
+        if key not in used_keys:
             used_keys.append(key)
+    # 第二遍：定号
+    for pt in points:
+        key = pt["key"]
+        if key in freeze_key_num:
+            key_to_num[key] = freeze_key_num[key]
+        else:
+            if reuse_gaps:
+                n = 1
+                while n in occupied or n in key_to_num.values():
+                    n += 1
+            else:
+                maxn += 1
+                n = maxn
+            key_to_num[key] = n
+            occupied.add(n)
         pt["num"] = key_to_num[key]
     return points, key_to_num, used_keys
 
@@ -404,8 +797,10 @@ def insert_hyperlinks(points, bracket, superscript, hyperlink_style_id,
                     if OLD_REF_RE.match((t.text or "").strip()):
                         t.text = label
             continue
-        # 占位符：把超链接插到锚点 run 的位置，移除锚点
+        # 占位符：句内落点校正（误放句号后则归位到标点前），
+        # 然后把超链接插到锚点 run 的位置，移除锚点
         anchor_el = pt["anchor"]
+        _snap_anchor_before_punct(anchor_el)
         h = build_hyperlink(anchor, label, superscript, hyperlink_style_id,
                             font_en, font_cn)
         anchor_el.addprevious(h)
@@ -416,9 +811,17 @@ def insert_hyperlinks(points, bracket, superscript, hyperlink_style_id,
 
 # ---------- 参考文献表 ----------
 
-def find_or_create_heading(body, heading_text, heading_style_id):
+def find_or_create_heading(body, heading_text, heading_style_id,
+                           styles_root=None):
     """找标题段（文本归一化后匹配 TARGET_HEADINGS 或用户指定 heading_text），
-       没有则创建。返回标题段元素。"""
+       没有则创建。返回标题段元素。
+
+    v1.8 定位改进：
+      - 匹配全部候选后取【最后一个】匹配段（更接近文末，避免被正文中
+        早出现的“References”字样误导）；
+      - 自动跳过目录（TOC）区域：含 TOC 域 / 位于 fldSimple TOC 内 /
+        样式名含 toc 的段不作为标题候选——修复“带目录文档把条目误插进 TOC”。
+    """
     def _norm(s):
         # 去空白/冒号/句点/数字后缀，统一小写，便于宽容匹配
         s = re.sub(r"[\s:：.。·\-–—]+", "", (s or "").strip().casefold())
@@ -429,9 +832,16 @@ def find_or_create_heading(body, heading_text, heading_style_id):
         candidates.add(_norm(heading_text))
     for t in TARGET_HEADINGS:
         candidates.add(_norm(t))
+    is_toc = make_toc_filter(body, styles_root)
+    found = []
     for p in body.iter(w("p")):
-        if _norm(para_text(p)) in candidates:
-            return p
+        if _norm(para_text(p)) not in candidates:
+            continue
+        if is_toc(p):
+            continue  # 目录里的“参考文献”条目，不是真实标题
+        found.append(p)
+    if found:
+        return found[-1]  # 取最后一个（更接近文末）
     # 创建标题段（文末）
     p = etree.SubElement(body, w("p"))
     if heading_style_id:
@@ -629,9 +1039,9 @@ def rebuild_bibliography(body, heading, used_keys, refs, style,
                          indent=True, align="both", bold_num=False,
                          hanging_pt=21.0, italic_source=True,
                          items=None, hyperlink_style_id=None,
-                         year_suffix=None):
+                         year_suffix=None, num_map=None):
     """在标题段之后重建条目段：删除旧的（含 ref_ 书签的段），插入新条目。
-       numbered   按出现顺序编号；
+       numbered   按出现顺序编号（num_map 提供时按 key 的冻结编号显示）；
        author-year 按作者字母序排列、不编号。
        items 传入 zip 条目字典时，条目中的 DOI 会被渲染为可点击超链接。"""
     key_to_ref = {r["key"]: r for r in refs}
@@ -683,7 +1093,8 @@ def rebuild_bibliography(body, heading, used_keys, refs, style,
             raise RuntimeError(f"引用表中找不到 key={key}")
         if year_suffix.get(key):
             ref = dict(ref, year=(ref.get("year") or "") + year_suffix[key])
-        p = build_entry_paragraph(num, key, ref, style, entry_num_style, bid,
+        disp_num = (num_map or {}).get(key, num)
+        p = build_entry_paragraph(disp_num, key, ref, style, entry_num_style, bid,
                                   citation_mode, font_en, font_cn, indent,
                                   align, bold_num, hanging_pt, italic_source,
                                   doi_links, hyperlink_style_id)
@@ -759,7 +1170,7 @@ def to_placeholders_mode(docx_list, backup_dir=None):
     返回转换的引用超链接数量。"""
     total = 0
     for d in docx_list:
-        items, doc_root, _ = load_docx(d)
+        items, doc_root, styles_root = load_docx(d)
         body = doc_root.find(w("body"))
         # 1) 引用超链接 -> [CITE:key] 文本 run（保留原 run 的 rPr 格式）
         for h in list(body.iter(w("hyperlink"))):
@@ -781,34 +1192,134 @@ def to_placeholders_mode(docx_list, backup_dir=None):
             parent.replace(h, new_r)
             total += 1
         # 2) 删除文末参考文献表（标题段之后的条目段：带 ref_ 书签的段
-        #     + 紧跟其后的 [n] 开头段；遇到其他非空段即停止）
+        #    + 紧跟其后的 [n] 开头段；遇到其他非空段即停止）
+        #    标题定位与 insert 一致：跳过 TOC 区域，取最后一个匹配段
         target_heads = {_norm_heading_text(t) for t in TARGET_HEADINGS}
-        after = False
-        prev_entry = False
+        is_toc = make_toc_filter(body, styles_root)
+        head = None
+        for p in body.iter(w("p")):
+            if _norm_heading_text(para_text(p)) not in target_heads:
+                continue
+            if is_toc(p):
+                continue
+            head = p  # 取最后一个
         removed = 0
-        for child in list(body):
-            if after:
-                if child.tag == w("p"):
-                    has_ref_bookmark = any(
-                        (bs.get(w("name")) or "").startswith("ref_")
-                        for bs in child.iter(w("bookmarkStart")))
-                    txt = para_text(child).strip()
-                    if has_ref_bookmark or (ENTRY_START_RE.match(txt) and prev_entry):
-                        body.remove(child)
-                        removed += 1
-                        prev_entry = True
-                    elif txt:
-                        break
-                    else:
-                        prev_entry = False
-            elif child.tag == w("p") and _norm_heading_text(para_text(child)) in target_heads:
-                after = True
-                prev_entry = False
+        if head is not None:
+            after = False
+            prev_entry = False
+            for child in list(body):
+                if after:
+                    if child.tag == w("p"):
+                        has_ref_bookmark = any(
+                            (bs.get(w("name")) or "").startswith("ref_")
+                            for bs in child.iter(w("bookmarkStart")))
+                        txt = para_text(child).strip()
+                        if has_ref_bookmark or (ENTRY_START_RE.match(txt) and prev_entry):
+                            body.remove(child)
+                            removed += 1
+                            prev_entry = True
+                        elif txt:
+                            break
+                        else:
+                            prev_entry = False
+                elif child is head:
+                    after = True
+                    prev_entry = False
         # 3) 备份并保存
         bpath = backup_docx(d, backup_dir)
         save_docx(d, items, doc_root)
         print(f"已转换：{d}（文末条目移除 {removed} 条；原文件备份：{bpath}）")
     return total
+
+
+def write_audit_report(path, docs, main_idx, key_to_num, used_keys,
+                       old_map, old_order, refs_by_key, citation_mode,
+                       args, bpaths, stack_warns, num_diff):
+    """生成变更审计报告（--audit）：新增/移除/移位引用句 + 编号映射 diff
+    + 堆叠告警 + 备份清单，配合 _backup/ 一键回滚。"""
+    lines = ["# 引用变更审计报告", "",
+             f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+             f"- 文档：{'、'.join(os.path.basename(x['path']) for x in docs)}"
+             f"（主文档：{os.path.basename(docs[main_idx]['path'])}）",
+             f"- 引用表：{args.refs or '(docx 同目录)'}",
+             f"- 样式：{args.style} / {args.citation}"
+             f"{' / 冻结编号(--freeze)' if args.freeze else ''}",
+             f"- 引用点：{sum(len(x['points']) for x in docs)} 处",
+             f"- 文末条目：{len(used_keys)} 条", ""]
+    # 1) 编号映射 diff
+    lines.append("## 1. 编号映射 diff（vs 上次）")
+    if num_diff:
+        added, removed, changed, stable = num_diff
+        if added or removed or changed:
+            lines.append("| key | 旧编号 | 新编号 | 变更 |")
+            lines.append("|---|---|---|---|")
+            for k, o, n in added:
+                lines.append(f"| {k} | — | {n} | 新增引用 |")
+            for k, o, n in removed:
+                lines.append(f"| {k} | {o} | — | 移除引用 |")
+            for k, o, n in changed:
+                lines.append(f"| {k} | {o} | {n} | 编号移位 |")
+        else:
+            lines.append("（无变化）")
+    else:
+        lines.append("（无上次状态可对比：首次运行 / --no-state）")
+    lines.append("")
+    # 2) 引用点清单（句级）
+    lines.append("## 2. 引用点清单（句级落点）")
+    lines.append("| 文档 | 段 | 句 | 编号 | key | 引用句 |")
+    lines.append("|---|---|---|---|---|---|")
+    for di, x in enumerate(docs):
+        tag = "主" if di == main_idx else str(di + 1)
+        pidx = 0
+        for p in x["body"].iter(w("p")):
+            pidx += 1
+            pts = [pt for pt in x["points"] if pt["paragraph"] is p]
+            if not pts:
+                continue
+            full = para_text(p)
+            sents = split_sentences(full)
+            for pt in pts:
+                key = pt["key"]
+                num = pt.get("num")
+                off = ref_offset_in_para(p, key)
+                si, stxt = locate_sentence(sents, off) \
+                    if off is not None else (None, "")
+                sent_disp = (stxt if si is not None else full)[:80]
+                sent_disp = sent_disp.replace("|", "｜").replace("\n", " ")
+                lines.append(f"| {tag} | {pidx} | {si + 1 if si is not None else '—'} | "
+                             f"{num if num is not None else '—'} | {key} | {sent_disp} |")
+    lines.append("")
+    # 3) 堆叠告警
+    lines.append("## 3. 堆叠告警")
+    if stack_warns:
+        for docname, (pidx, typ, cnt, th, nums, frag) in stack_warns:
+            frag = frag.replace("|", "｜")
+            lines.append(f"- {docname} 段{pidx} {typ}：{cnt} 个编号（阈值 {th}）"
+                         f"{nums}「{frag}」")
+    else:
+        lines.append("（无）")
+    lines.append("")
+    # 4) 文末条目
+    lines.append("## 4. 文末参考文献条目")
+    lines.append("| 编号 | key | 文献 |")
+    lines.append("|---|---|---|")
+    key_to_ref = refs_by_key
+    for num, key in enumerate(sorted(used_keys,
+                                     key=lambda k: key_to_num.get(k, 0)), 1):
+        ref = key_to_ref.get(key, {})
+        title = (ref.get("title") or "")[:70].replace("|", "｜")
+        lines.append(f"| {key_to_num.get(key, num)} | {key} | {title} |")
+    lines.append("")
+    # 5) 备份与回滚
+    lines.append("## 5. 备份与一键回滚")
+    lines.append("本次修改前的原文件已备份到 `_backup/`：")
+    for path, bpath in bpaths:
+        lines.append(f"- `{os.path.basename(path)}` → `{bpath}`")
+    lines.append("")
+    lines.append("回滚：把对应备份文件复制回原路径覆盖即可（或在 Word 中关闭文档后操作）。")
+    lines.append("")
+    with io.open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 # ---------- 主流程 ----------
@@ -822,7 +1333,7 @@ def main():
                     help="主文档路径（参考文献表所在，默认最后一个 --docx）")
     ap.add_argument("--refs", default=None, help="refs.csv 路径（默认 docx 同目录）")
     ap.add_argument("--style", default="gbt7714",
-                    choices=["gbt7714", "apa", "vancouver", "mla"])
+                    choices=["gbt7714", "apa", "vancouver", "mla", "harvard"])
     ap.add_argument("--heading", default="", help="参考文献标题文本（找不到时创建）")
     ap.add_argument("--no-superscript", action="store_true", help="正文编号不用上标")
     ap.add_argument("--bracket", default="[]", help="正文编号括号，如 [] 或 ()")
@@ -854,6 +1365,25 @@ def main():
                          "生成纯文本草稿交给 AI/他人修改正文，占位符是普通文本不会被破坏；"
                          "对方改完后重跑本脚本（正常参数）即恢复超链接、编号与文末表。"
                          "此模式不需要 --refs。")
+    ap.add_argument("--freeze", action="store_true",
+                    help="冻结编号：以 refs.csv 的 key 为准保持编号不变（collet2020 恒为 1），"
+                         "只做增量增删——新增 key 取未占用的最小编号（--no-reuse-gaps 时取最大号+1），"
+                         "从正文消失的 key 释放编号；适合交稿后维护、需要编号稳定对稿的场景。")
+    ap.add_argument("--no-reuse-gaps", action="store_true",
+                    help="--freeze 下新 key 不复用释放的空号（用当前最大编号+1）")
+    ap.add_argument("--stack-sentence", type=int, default=3,
+                    help="单句内堆叠编号告警阈值（默认 3）")
+    ap.add_argument("--stack-paragraph", type=int, default=5,
+                    help="单段内堆叠编号告警阈值（默认 5）")
+    ap.add_argument("--no-stack-warning", action="store_true",
+                    help="关闭句级/段级堆叠编号告警")
+    ap.add_argument("--audit", default="",
+                    help="输出变更审计报告到 Markdown 文件：新增/移除/移位引用句 + 编号映射 diff"
+                         " + 堆叠告警 + 备份清单（配合 _backup/ 一键回滚）")
+    ap.add_argument("--no-state", action="store_true",
+                    help="不读写编号状态文件（无编号 diff、--freeze 不可用）")
+    ap.add_argument("--state", default="",
+                    help="自定义编号状态文件路径（默认 <主文档同目录>/_refs_state/<主文档名>.json）")
     args = ap.parse_args()
 
     docx_list = [os.path.abspath(d) for d in args.docx]
@@ -910,16 +1440,32 @@ def main():
         print("在需要引用的句子末尾放 [?] 或 [CITE:key] 后重跑。")
         sys.exit(1)
 
-    # 2. 全局编号（跨文档连续）
+    # 2. 编号状态（v1.8：diff / freeze）
+    state_fp = None
+    old_map, old_order = None, None
+    if not args.no_state:
+        state_fp = state_path(docx_list[main_idx], args.state or None)
+        old_map, old_order = load_state(state_fp)
+    freeze_key_num = old_map if args.freeze else None
+    if args.freeze and args.citation != "numbered":
+        print("注意：--freeze 仅对编号制有效（author-year 无编号），本次仅输出引用集合 diff。")
+        freeze_key_num = None
+
+    # 3. 全局编号（跨文档连续；--freeze 时以 key 冻结编号，仅增量增删）
     flat = [pt for x in docs for pt in x["points"]]
-    flat, key_to_num, used_keys = assign_numbers(flat, refs)
+    flat, key_to_num, used_keys = assign_numbers(
+        flat, refs, freeze_key_num,
+        reuse_gaps=not args.no_reuse_gaps)
     idx = 0
     for x in docs:
         n = len(x["points"])
         x["points"] = flat[idx:idx + n]
         idx += n
+    # freeze 下文末表按编号升序排列（正文编号仍按 key 定号）
+    if args.freeze and args.citation == "numbered":
+        used_keys = sorted(used_keys, key=lambda k: key_to_num[k])
 
-    # 3. 更新/插入正文引用（样式取自主文档）
+    # 4. 更新/插入正文引用（样式取自主文档）
     bracket = args.bracket if len(args.bracket) == 2 else "[]"
     superscript = not args.no_superscript
     refs_by_key = {r["key"]: r for r in refs}
@@ -938,9 +1484,10 @@ def main():
                                        refs_by_key, args.font_en, args.font_cn,
                                        year_suffix)
 
-    # 4. 主文档参考文献表
+    # 5. 主文档参考文献表
     heading = find_or_create_heading(main_doc["body"], args.heading,
-                                     heading_style_id)
+                                     heading_style_id,
+                                     styles_root=main_doc["styles_root"])
     bookmark_id_base = 1
     for bs in main_doc["root"].iter(w("bookmarkStart")):
         try:
@@ -954,7 +1501,8 @@ def main():
         args.font_en, args.font_cn, not args.no_indent, args.align,
         args.bold_num, args.hanging_pt, not args.no_italic_source,
         items=main_doc["items"], hyperlink_style_id=hyperlink_style_id,
-        year_suffix=year_suffix)
+        year_suffix=year_suffix,
+        num_map=key_to_num if args.freeze and args.citation == "numbered" else None)
 
     # 5. 非主文档：引用超链接指向主文档（跨文档跳转）
     cross_count = 0
@@ -968,41 +1516,117 @@ def main():
     print(f"引用点：{total_points} 处（新增 {total_new}、保留更新 {total_points - total_new}）"
           f"｜参考文献条目：{entry_count} 条"
           f"｜跨文档链接：{cross_count}")
+
+    # 编号方案 + 与上次状态的 diff（v1.8：增量更新可视化）
+    num_diff = None
     if args.citation == "numbered":
         print("编号方案：", ", ".join(f"{k}->{n}" for k, n in key_to_num.items()))
+        if args.freeze:
+            print("模式：--freeze 冻结（key 编号固定，仅增量增删）")
+        if old_map is not None and old_map:
+            added, removed, changed, stable = diff_key_nums(old_map, key_to_num)
+            num_diff = (added, removed, changed, stable)
+            print(f"编号 diff（vs 上次）：新增 {len(added)} ｜移除 {len(removed)} ｜"
+                  f"变化 {len(changed)} ｜不变 {len(stable)}")
+            for k, _o, n in added:
+                print(f"  + {k} -> {n}（新增引用）")
+            for k, o, _n in removed:
+                print(f"  - {k}（原编号 {o}，本次移除）")
+            for k, o, n in changed:
+                print(f"  ~ {k}: {o} -> {n}（编号移位）")
     else:
         print("引用样式：作者-年份制（--citation author-year）")
+        if old_order is not None:
+            new_order = []
+            for pt in flat:
+                if pt["key"] not in new_order:
+                    new_order.append(pt["key"])
+            added = [k for k in new_order if k not in old_order]
+            removed = [k for k in old_order if k not in new_order]
+            num_diff = ([(k, None, None) for k in added],
+                        [(k, None, None) for k in removed], [], [])
+            if added or removed:
+                print(f"引用集合 diff（vs 上次）：新增 {added} ｜移除 {removed}")
 
-    # 5b. 引用对应性对照表（核对每处引用是否真实支撑所在句子）
+    # 5b. 引用对应性对照表（句级：每处编号对应哪篇文献、所在句，核对是否对得上）
     if args.mapping:
-        print("\n== 正文引用 ↔ 文献对照表（逐处核对引用是否对得上） ==")
-        for pt in points:
-            key = pt["key"]
-            ref = refs_by_key.get(key, {})
-            num = pt.get("num")
-            para = para_text(pt["paragraph"]).strip()
-            if len(para) > 90:
-                para = para[:90] + "…"
-            tag = f"[{num}]" if num else "—"
-            print(f"{tag} 段落：「{para}」")
-            print(f"    ↳ key={key} → {(ref.get('title') or '')[:60]}"
-                  f"（{(ref.get('year') or '')}）")
-            note = (ref.get("note") or "").strip()
-            if note:
-                print(f"       note：{note[:100]}")
+        print("\n== 正文引用 ↔ 文献对照表（句级，逐处核对引用是否对得上） ==")
+        for di, x in enumerate(docs):
+            tag = "（主文档）" if di == main_idx else ""
+            pidx = 0
+            for p in x["body"].iter(w("p")):
+                pidx += 1
+                pts = [pt for pt in x["points"] if pt["paragraph"] is p]
+                if not pts:
+                    continue
+                full = para_text(p)
+                sents = split_sentences(full)
+                for pt in pts:
+                    key = pt["key"]
+                    ref = refs_by_key.get(key, {})
+                    num = pt.get("num")
+                    off = ref_offset_in_para(p, key)
+                    si, stxt = locate_sentence(sents, off) \
+                        if off is not None else (None, "")
+                    if si is None:
+                        sent_disp = full[:100] + ("…" if len(full) > 100 else "")
+                    else:
+                        sent_disp = stxt[:120] + ("…" if len(stxt) > 120 else "")
+                    tag2 = f"{tag} 段{pidx}" + (f" 句{si + 1}" if si is not None else "")
+                    label = f"[{num}]" if num else "—"
+                    print(f"{label} {tag2}：「{sent_disp}」")
+                    print(f"    ↳ key={key} → {(ref.get('title') or '')[:60]}"
+                          f"（{(ref.get('year') or '')}）")
+                    note = (ref.get("note") or "").strip()
+                    if note:
+                        print(f"       note：{note[:100]}")
         print()
+
+    # 5c. 堆叠告警（句级落点检查：单句/单段堆叠编号提示拆分）
+    stack_warns = []
+    if not args.no_stack_warning:
+        for di, x in enumerate(docs):
+            warns = scan_stacking(x["body"], args.stack_sentence,
+                                  args.stack_paragraph, args.citation)
+            if warns:
+                tag = "（主文档）" if di == main_idx else ""
+                print(f"\n⚠ 堆叠告警[{os.path.basename(x['path'])}{tag}]"
+                      f"——请把编号拆分到各自支撑的句子，避免段末打包：")
+                for pidx, typ, cnt, th, nums, frag in warns:
+                    print(f"  [段{pidx} {typ}] {cnt} 个编号（阈值 {th}）"
+                          f"{nums}：「{frag}」")
+                stack_warns.extend((os.path.basename(x["path"]), w)
+                                   for w in warns)
 
     if args.dry_run:
         print("--dry-run：未写文件。")
         return
 
     # 6. 备份并保存全部文档
+    bpaths = []
     for x in docs:
         bpath = backup_docx(x["path"], args.backup_dir)
         save_docx(x["path"], x["items"], x["root"])
+        bpaths.append((x["path"], bpath))
         print(f"已写入：{x['path']}（原文件备份：{bpath}）")
 
-    # 7. 回读验证
+    # 7. 更新编号状态（供下次 diff / --freeze 使用）
+    if state_fp:
+        order = []
+        for pt in flat:
+            if pt["key"] not in order:
+                order.append(pt["key"])
+        save_state(state_fp, key_to_num, order)
+        print(f"编号状态已更新：{state_fp}")
+
+    # 8. 变更审计报告（--audit）
+    if args.audit:
+        write_audit_report(args.audit, docs, main_idx, key_to_num, used_keys,
+                           old_map, old_order, refs_by_key, args.citation,
+                           args, bpaths, stack_warns, num_diff)
+        print(f"变更审计报告：{args.audit}")
+
+    # 9. 回读验证
     all_nums = []
     for i, x in enumerate(docs):
         items2, doc_root2, _ = load_docx(x["path"])
@@ -1022,11 +1646,15 @@ def main():
                 if m:
                     all_nums.append(int(m.group()))
     if args.citation == "numbered":
-        if set(all_nums) != set(range(1, entry_count + 1)):
-            print(f"警告：编号不连续！全文正文编号 {sorted(all_nums)}，条目 {entry_count}，"
-                  f"缺失 {set(range(1, entry_count + 1)) - set(all_nums)}")
+        expected = (set(key_to_num.values()) if args.freeze
+                    else set(range(1, entry_count + 1)))
+        if set(all_nums) != expected:
+            print(f"警告：编号不一致！全文正文编号 {sorted(all_nums)}，"
+                  f"期望 {sorted(expected)}，"
+                  f"缺失 {sorted(expected - set(all_nums))}，"
+                  f"多余 {sorted(set(all_nums) - expected)}")
         else:
-            print("编号连续性验证通过（全文跨文档）。")
+            print("编号一致性验证通过（全文跨文档）。")
     bookmarks = [bs.get(w("name")) for bs in main_doc["root"].iter(w("bookmarkStart"))
                  if (bs.get(w("name")) or "").startswith("ref_")]
     print(f"文末书签 {len(bookmarks)} 个")

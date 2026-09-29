@@ -108,7 +108,7 @@ def main():
 
     # 断言 4：重跑幂等（编号不变、跨文档链接不重复）
     out2 = run_insert()
-    assert "编号连续性验证通过" in out2
+    assert "编号一致性验证通过" in out2, out2[-500:]
     h1b, ext1b = inspect(CH1)
     assert [t for _, t, _ in h1b] == t1, "重跑后第一章编号变化！"
     assert len(ext1b) == len(ext1), f"重跑后跨文档链接重复: {len(ext1b)} vs {len(ext1)}"
